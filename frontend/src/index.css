@@ -68,3 +68,20 @@ html, body, #root {
   backdrop-filter: blur(12px);
   border: 1px solid rgba(226, 232, 240, 0.8);
 }
+
+@keyframes scanLaser {
+  0% { top: 8%; opacity: 0.8; }
+  50% { top: 90%; opacity: 1; }
+  100% { top: 8%; opacity: 0.8; }
+}
+
+.scan-laser {
+  position: absolute;
+  left: 5%;
+  right: 5%;
+  height: 3px;
+  background: #2563eb;
+  box-shadow: 0 0 14px 4px rgba(37, 99, 235, 0.75);
+  animation: scanLaser 2s ease-in-out infinite;
+  z-index: 10;
+}

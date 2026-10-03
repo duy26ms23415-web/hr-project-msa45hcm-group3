@@ -20,7 +20,8 @@ api.interceptors.request.use((config) => {
 api.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response?.status === 401 && !window.location.pathname.includes('/login')) {
+    const isKioskRequest = error.config?.url?.includes('/kiosk/') || error.config?.headers?.['X-Kiosk-Secret'];
+    if (error.response?.status === 401 && !window.location.pathname.includes('/login') && !isKioskRequest) {
       localStorage.removeItem('access_token');
       localStorage.removeItem('refresh_token');
       window.location.href = '/login';
