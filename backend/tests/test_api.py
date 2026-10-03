@@ -72,7 +72,7 @@ async def test_leave_request_and_manager_approval():
         staff_token = staff_auth.json()["access_token"]
 
         # Use unique future date
-        future_date = (date(2026, 12, 1) + timedelta(days=secrets.randbelow(20))).isoformat()
+        future_date = (date.today() + timedelta(days=secrets.randbelow(500) + 50)).isoformat()
 
         leave_resp = await ac.post("/api/v1/leave/requests", json={
             "leave_type_id": 1,

@@ -86,3 +86,5 @@ class EmployeeResponse(EmployeeBase):
     employee_id: int
     created_at: datetime
     updated_at: datetime
+    department: Optional[DepartmentResponse] = None
+    position: Optional[PositionResponse] = None
