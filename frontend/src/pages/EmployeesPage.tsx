@@ -26,7 +26,7 @@ import { QRCodeSVG } from 'qrcode.react';
 import dayjs from 'dayjs';
 import { useAuth } from '../context/AuthContext';
 import api from '../api/client';
-import type { Employee } from '../types';
+import type { Employee, QRCard } from '../types';
 
 const { Title, Text } = Typography;
 
@@ -344,31 +344,43 @@ export const EmployeesPage: React.FC = () => {
           <Text type="secondary" style={{ fontSize: 13 }}>Thẻ vật lý tĩnh quét tại máy Kiosk</Text>
         </div>
 
-        <div
-          style={{
-            background: '#f8fafc',
-            border: '2px dashed #93c5fd',
-            borderRadius: 16,
-            padding: 24,
-            display: 'inline-block',
-            margin: '8px auto 16px',
-          }}
-        >
-          {qrCard?.qr_code_value ? (
-            <QRCodeSVG value={qrCard.qr_code_value} size={180} />
-          ) : (
-            <div style={{ width: 180, height: 180, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              Đang tải mã QR...
-            </div>
-          )}
-        </div>
+        {(() => {
+          const qrCodeValue =
+            qrCard?.card_code ||
+            qrCard?.qr_code_value ||
+            qrCard?.raw_token ||
+            (selectedEmployee ? `${selectedEmployee.employee_code}_QR_STATIC` : '');
 
-        <div style={{ textAlign: 'left', background: '#f1f5f9', padding: '12px 16px', borderRadius: 10, fontSize: 13 }}>
-          <div>Họ tên: <b>{selectedEmployee?.full_name}</b></div>
-          <div>Mã nhân viên: <b>{selectedEmployee?.employee_code}</b></div>
-          <div>Giá trị mã: <code>{qrCard?.qr_code_value}</code></div>
-          <div>Trạng thái thẻ: <Tag color="success">HOẠT ĐỘNG</Tag></div>
-        </div>
+          return (
+            <>
+              <div
+                style={{
+                  background: '#f8fafc',
+                  border: '2px dashed #93c5fd',
+                  borderRadius: 16,
+                  padding: 24,
+                  display: 'inline-block',
+                  margin: '8px auto 16px',
+                }}
+              >
+                {qrCodeValue ? (
+                  <QRCodeSVG value={qrCodeValue} size={180} />
+                ) : (
+                  <div style={{ width: 180, height: 180, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    Đang tải mã QR...
+                  </div>
+                )}
+              </div>
+
+              <div style={{ textAlign: 'left', background: '#f1f5f9', padding: '12px 16px', borderRadius: 10, fontSize: 13 }}>
+                <div>Họ tên: <b>{selectedEmployee?.full_name}</b></div>
+                <div>Mã nhân viên: <b>{selectedEmployee?.employee_code}</b></div>
+                <div>Mã thẻ QR: <code style={{ color: '#1677ff', fontWeight: 600 }}>{qrCodeValue}</code></div>
+                <div style={{ marginTop: 4 }}>Trạng thái: <Tag color="success">HOẠT ĐỘNG</Tag></div>
+              </div>
+            </>
+          );
+        })()}
 
         <div style={{ marginTop: 20 }}>
           <Button type="primary" block onClick={() => setQrModalOpen(false)}>

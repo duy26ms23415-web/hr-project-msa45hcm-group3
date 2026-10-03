@@ -56,20 +56,47 @@ class AttendanceService:
         return max(0, total_minutes)
 
     @staticmethod
-    async def issue_qr_card(db: AsyncSession, employee_id: int, creator_user_id: int) -> Tuple[QRCard, str]:
+    async def issue_qr_card(
+        db: AsyncSession,
+        employee_id: int,
+        creator_user_id: int,
+        custom_code: Optional[str] = None
+    ) -> Tuple[QRCard, str]:
         """Issue a new static physical QR card for an employee"""
         stmt = select(Employee).where(Employee.employee_id == employee_id)
         emp = (await db.execute(stmt)).scalar_one_or_none()
         if not emp:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Employee not found")
 
-        # Generate unique random opaque token
-        raw_token = f"HRG3-{secrets.token_hex(24)}"
+        # Use custom code or generate unique secure card token
+        raw_token = custom_code or f"HRG3-{emp.employee_code}-{secrets.token_hex(16).upper()}"
         t_hash = hash_token(raw_token)
+
+        # Check if a card with this exact token_hash already exists
+        stmt_existing = select(QRCard).where(QRCard.token_hash == t_hash)
+        existing_card = (await db.execute(stmt_existing)).scalars().first()
+
+        # Revoke any prior active QR cards for this employee
+        stmt_active = select(QRCard).where(
+            and_(QRCard.employee_id == employee_id, QRCard.revoked_at.is_(None))
+        )
+        active_cards = (await db.execute(stmt_active)).scalars().all()
+        for card in active_cards:
+            if not existing_card or card.qr_card_id != existing_card.qr_card_id:
+                card.revoked_at = datetime.now(timezone.utc)
+
+        if existing_card:
+            existing_card.revoked_at = None
+            existing_card.card_code = raw_token
+            existing_card.issued_at = datetime.now(timezone.utc)
+            existing_card.created_by_user_id = creator_user_id
+            await db.flush()
+            return existing_card, raw_token
 
         qr_card = QRCard(
             employee_id=employee_id,
             token_hash=t_hash,
+            card_code=raw_token,
             issued_at=datetime.now(timezone.utc),
             created_by_user_id=creator_user_id
         )
@@ -83,7 +110,7 @@ class AttendanceService:
         t_hash = hash_token(scan_in.qr_token)
         stmt = select(QRCard).where(
             and_(
-                QRCard.token_hash == t_hash,
+                (QRCard.token_hash == t_hash) | (QRCard.card_code == scan_in.qr_token),
                 QRCard.revoked_at.is_(None)
             )
         ).options(selectinload(QRCard.employee))

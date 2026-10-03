@@ -10,6 +10,7 @@ class QRCardResponse(BaseModel):
     qr_card_id: int
     employee_id: int
     token_hash: str
+    card_code: Optional[str] = None
     issued_at: datetime
     expires_at: Optional[datetime] = None
     revoked_at: Optional[datetime] = None
@@ -22,9 +23,15 @@ class QRCardCreateResponse(QRCardResponse):
 # Kiosk Scan Request
 class ScanRequest(BaseModel):
     qr_token: str
-    event_type: str = Field(..., pattern="^(CHECK_IN|CHECK_OUT)$")
+    event_type: str = Field("CHECK_IN", pattern="^(CHECK_IN|CHECK_OUT)$")
     device_id: str
     idempotency_key: str
+
+
+class KioskScanRequest(BaseModel):
+    qr_code: str
+    device_id: str = "KIOSK_MAIN_OFFICE"
+    scan_timestamp: Optional[datetime] = None
 
 
 class ScanResponse(BaseModel):
@@ -35,6 +42,8 @@ class ScanResponse(BaseModel):
     occurred_at: datetime
     status: str
     message: str
+    worked_minutes: Optional[int] = 0
+    event_time: Optional[datetime] = None
 
 
 # Attendance Day Record

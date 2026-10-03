@@ -23,6 +23,18 @@ export interface Employee {
   position?: { position_name: string };
 }
 
+export interface QRCard {
+  qr_card_id: number;
+  employee_id: number;
+  token_hash: string;
+  card_code?: string;
+  qr_code_value?: string;
+  raw_token?: string;
+  issued_at: string;
+  expires_at?: string;
+  revoked_at?: string;
+}
+
 export interface AttendanceRecord {
   attendance_day_id: number;
   employee_id: number;

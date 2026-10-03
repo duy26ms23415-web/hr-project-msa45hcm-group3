@@ -254,6 +254,34 @@ async def seed_data():
                 )
                 session.add(holiday)
 
+        # 10. Static QR Cards for Kiosk Scanning
+        from app.models.attendance import QRCard
+        from app.services.attendance_service import hash_token
+        qr_cards_data = [
+            (admin_emp.employee_id, "EMP001_QR_STATIC"),
+            (mgr_emp.employee_id, "EMP002_QR_STATIC"),
+            (staff_emp.employee_id, "EMP003_QR_STATIC"),
+        ]
+        for e_id, code in qr_cards_data:
+            stmt = select(QRCard).where(QRCard.employee_id == e_id, QRCard.revoked_at.is_(None)).order_by(QRCard.issued_at.desc())
+            existing_cards = (await session.execute(stmt)).scalars().all()
+            if existing_cards:
+                for idx, c in enumerate(existing_cards):
+                    if idx == 0:
+                        c.card_code = code
+                        c.token_hash = hash_token(code)
+                    else:
+                        c.revoked_at = datetime.now(timezone.utc)
+            else:
+                card = QRCard(
+                    employee_id=e_id,
+                    token_hash=hash_token(code),
+                    card_code=code,
+                    issued_at=datetime.now(timezone.utc),
+                    created_by_user_id=admin_acc.user_account_id
+                )
+                session.add(card)
+
         await session.commit()
         print("✅ Khởi tạo dữ liệu mẫu thành công!")
         print("   Tài khoản Admin / HR: admin@hrgroup3.com / Password@123")

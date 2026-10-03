@@ -12,6 +12,7 @@ class QRCard(Base):
     qr_card_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     employee_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("hr_employees.employee_id"), nullable=False, index=True)
     token_hash: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
+    card_code: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     issued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
