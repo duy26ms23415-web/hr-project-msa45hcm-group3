@@ -2,6 +2,10 @@
 
 Tài liệu thiết kế và định hướng kiến trúc hệ thống quản lý nhân sự, chấm công QR, tính lương và Trợ lý ảo AI nội bộ của Group 3 HCM.
 
+> 📚 **Tài liệu kỹ thuật chuyên sâu:**
+> - 🏛️ **Kiến trúc phần mềm chi tiết (SAD):** [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+> - 🚀 **Hướng dẫn cài đặt & vận hành (Setup Guide):** [docs/SETUP_GUIDE.md](docs/SETUP_GUIDE.md)
+
 ---
 
 ## 1. Mục tiêu và Quy định nghiệp vụ cốt lõi
