@@ -1,3 +1,4 @@
+import asyncio
 from datetime import date, datetime, timedelta, timezone
 from typing import Optional, List, Dict, Any
 from sqlalchemy import select, and_
@@ -182,17 +183,22 @@ class AIService:
                 )
             )
 
-        # If Gemini API Key is configured, use Gemini LLM for natural dialogue
-        if settings.GEMINI_API_KEY:
+        # If a valid Gemini API Key is configured, use Gemini LLM asynchronously
+        api_key = settings.GEMINI_API_KEY.strip() if settings.GEMINI_API_KEY else ""
+        if api_key and not api_key.startswith("your_") and len(api_key) > 20:
             try:
-                genai.configure(api_key=settings.GEMINI_API_KEY)
-                model = genai.GenerativeModel(
-                    model_name=settings.GEMINI_MODEL_NAME,
-                    system_instruction=COMPANY_POLICY_KNOWLEDGE
-                )
-                prompt = f"Thông tin nhân viên đang hỏi:\n{ctx}\n\nTin nhắn người dùng: {req.message}"
-                response = model.generate_content(prompt)
-                return AIChatResponse(reply=response.text, action=None)
+                def _call_gemini():
+                    genai.configure(api_key=api_key)
+                    model = genai.GenerativeModel(
+                        model_name=settings.GEMINI_MODEL_NAME,
+                        system_instruction=COMPANY_POLICY_KNOWLEDGE
+                    )
+                    prompt = f"Thông tin nhân viên đang hỏi:\n{ctx}\n\nTin nhắn người dùng: {req.message}"
+                    return model.generate_content(prompt)
+
+                response = await asyncio.wait_for(asyncio.to_thread(_call_gemini), timeout=5.0)
+                if response and response.text:
+                    return AIChatResponse(reply=response.text, action=None)
             except Exception:
                 pass
 
