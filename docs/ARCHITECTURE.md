@@ -59,17 +59,17 @@ C4Context
 
 ```mermaid
 graph TD
-    subgraph Client Layer
+    subgraph client_layer ["Client Layer"]
         WebSPA["Frontend Web App<br/>(React 19 + TypeScript + Vite + Ant Design)"]
         KioskWeb["Màn hình Kiosk Chấm công<br/>(React Web / Fullscreen View)"]
     end
 
-    subgraph Server Layer (FastAPI Backend)
+    subgraph server_layer ["Server Layer (FastAPI Backend)"]
         APIRouter["API Gateway & Routers<br/>(/api/v1/*)"]
         AuthMiddleware["Security & Auth Middleware<br/>(JWT Bearer + RBAC)"]
         KioskAuth["Kiosk Secret Validator<br/>(Header: X-Kiosk-Secret)"]
         
-        subgraph Domain Services
+        subgraph domain_services ["Domain Services"]
             AttService["Attendance Service"]
             LeaveService["Leave Service"]
             PayrollService["Payroll & Tax Service"]
@@ -77,12 +77,12 @@ graph TD
         end
     end
 
-    subgraph Data & Storage Layer
+    subgraph data_layer ["Data & Storage Layer"]
         PostgresDB[("PostgreSQL 16 Database<br/>(SQLAlchemy 2.x + Asyncpg)")]
         ExcelStorage["Excel Exporter<br/>(openpyxl memory streaming)"]
     end
 
-    subgraph External Services
+    subgraph external_services ["External Services"]
         GeminiLLM["Google Gemini AI"]
     end
 
