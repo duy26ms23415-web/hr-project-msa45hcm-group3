@@ -5,6 +5,7 @@ from typing import Optional, Tuple
 from sqlalchemy import select, and_
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
+# pyrefly: ignore [missing-import]
 from fastapi import HTTPException, status
 
 from app.models.organization import Employee
