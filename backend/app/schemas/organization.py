@@ -1,6 +1,6 @@
 from datetime import date, datetime
 from typing import Optional
-from pydantic import BaseModel, EmailStr, ConfigDict
+from pydantic import BaseModel, EmailStr, ConfigDict, Field, field_validator
 
 
 # Department Schemas
@@ -64,7 +64,14 @@ class EmployeeBase(BaseModel):
 
 
 class EmployeeCreate(EmployeeBase):
-    pass
+    login_password: Optional[str] = Field(default=None, min_length=8, max_length=72, repr=False)
+
+    @field_validator("login_password")
+    @classmethod
+    def validate_password_bytes(cls, value: Optional[str]) -> Optional[str]:
+        if value is not None and len(value.encode("utf-8")) > 72:
+            raise ValueError("Mật khẩu không được vượt quá 72 byte UTF-8")
+        return value
 
 
 class EmployeeUpdate(BaseModel):
