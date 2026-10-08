@@ -1,26 +1,27 @@
-FROM python:3.11-slim
-
-# Thiết lập thư mục làm việc
+# Stage 1: Build Frontend React
+FROM node:22-slim AS builder
 WORKDIR /app
 
-# Ngăn Python ghi file .pyc và bật log unbuffered
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
+COPY package*.json ./
+RUN npm install
 
-# Cài đặt dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Copy toàn bộ mã nguồn vào container
 COPY . .
+RUN npm run build
 
-# Cloud Run tự động inject biến PORT (mặc định 8080)
+# Stage 2: Production Container
+FROM node:22-slim AS runner
+WORKDIR /app
+
+ENV NODE_ENV=production
 ENV PORT=8080
+
+COPY package*.json ./
+RUN npm install --omit=dev
+
+# Copy mã nguồn server và bản build tĩnh của frontend
+COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/server.ts ./server.ts
+
 EXPOSE 8080
 
-# Chạy ứng dụng (chỉnh lại lệnh phù hợp với app của nhóm):
-# Ví dụ Streamlit:
-CMD streamlit run app.py --server.port=$PORT --server.address=0.0.0.0
-
-# Hoặc nếu là Flask / FastAPI:
-# CMD exec gunicorn --bind :$PORT --workers 1 --threads 8 --timeout 0 app:app
+CMD ["node", "server.ts"]
