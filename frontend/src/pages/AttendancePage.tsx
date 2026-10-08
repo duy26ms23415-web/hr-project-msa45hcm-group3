@@ -29,13 +29,15 @@ import {
 import dayjs from 'dayjs';
 import { useAuth } from '../context/AuthContext';
 import api from '../api/client';
-import type { AttendanceRecord, AttendanceFix } from '../types';
+import type { AttendanceRecord, AttendanceFix, Employee } from '../types';
 
 const { Title, Text } = Typography;
 
 export const AttendancePage: React.FC = () => {
   const { user, hasRole } = useAuth();
   const [activeTab, setActiveTab] = useState('records');
+  const isAdmin = hasRole(['ADMIN']);
+  const [employeesById, setEmployeesById] = useState<Record<number, Employee>>({});
   const [records, setRecords] = useState<AttendanceRecord[]>([]);
   const [myFixes, setMyFixes] = useState<AttendanceFix[]>([]);
   const [pendingFixes, setPendingFixes] = useState<AttendanceFix[]>([]);
@@ -55,8 +57,16 @@ export const AttendancePage: React.FC = () => {
   const fetchRecords = async () => {
     try {
       setLoading(true);
-      const res = await api.get('/attendance/records');
+      const [res, employeesRes] = await Promise.all([
+        api.get('/attendance/records'),
+        isAdmin ? api.get<Employee[]>('/employees') : Promise.resolve(null),
+      ]);
       setRecords(res.data);
+      if (employeesRes) {
+        setEmployeesById(Object.fromEntries(
+          employeesRes.data.map((employee) => [employee.employee_id, employee])
+        ));
+      }
     } catch (e) {
       console.error(e);
     } finally {
@@ -93,7 +103,7 @@ export const AttendancePage: React.FC = () => {
     if (activeTab === 'records') fetchRecords();
     if (activeTab === 'my-fixes') fetchMyFixes();
     if (activeTab === 'approvals') fetchPendingFixes();
-  }, [activeTab]);
+  }, [activeTab, isAdmin]);
 
   const handleCreateFix = async (values: any) => {
     setSubmitting(true);
@@ -207,6 +217,20 @@ export const AttendancePage: React.FC = () => {
                   rowKey="attendance_day_id"
                   loading={loading}
                   columns={[
+                    ...(isAdmin ? [
+                      {
+                        title: 'Họ và tên',
+                        key: 'employee_full_name',
+                        render: (_: unknown, record: AttendanceRecord) =>
+                          employeesById[record.employee_id]?.full_name || '-',
+                      },
+                      {
+                        title: 'Email',
+                        key: 'employee_email',
+                        render: (_: unknown, record: AttendanceRecord) =>
+                          employeesById[record.employee_id]?.email || '-',
+                      },
+                    ] : []),
                     {
                       title: 'Ngày làm việc',
                       dataIndex: 'work_date',
