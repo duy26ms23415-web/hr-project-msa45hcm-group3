@@ -1,27 +1,22 @@
-# Stage 1: Build Frontend React
-FROM node:22-slim AS builder
-WORKDIR /app
-
-COPY package*.json ./
-RUN npm install
-
-COPY . .
+# Build from the repository root: docker build -t hrms .
+FROM node:22-slim AS frontend
+WORKDIR /build/frontend
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+COPY frontend/ ./
 RUN npm run build
 
-# Stage 2: Production Container
-FROM node:22-slim AS runner
+FROM python:3.11-slim AS runtime
 WORKDIR /app
-
-ENV NODE_ENV=production
-ENV PORT=8080
-
-COPY package*.json ./
-RUN npm install --omit=dev
-
-# Copy mã nguồn server và bản build tĩnh của frontend
-COPY --from=builder /app/dist ./dist
-COPY --from=builder /app/server.ts ./server.ts
-
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    ENVIRONMENT=production \
+    PORT=8080
+COPY backend/requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
+COPY backend/ ./
+COPY --from=frontend /build/frontend/dist ./static
+RUN useradd --create-home --uid 10001 appuser
+USER appuser
 EXPOSE 8080
-
-CMD ["node", "server.ts"]
+CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port \"${PORT:-8080}\""]
