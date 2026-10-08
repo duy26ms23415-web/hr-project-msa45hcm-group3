@@ -3,12 +3,14 @@ from typing import List, Optional
 # pyrefly: ignore [missing-import]
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.api.deps import require_roles
-from app.models.auth import UserAccount
+from app.models.auth import UserAccount, Role, UserRoleAssignment
+from app.core.security import get_password_hash
 from app.models.organization import Employee, Department, Position
 from app.schemas.organization import EmployeeCreate, EmployeeUpdate, EmployeeResponse
 
@@ -85,9 +87,40 @@ async def create_employee(
                 detail=f"Người quản lý với ID {emp_in.manager_employee_id} không tồn tại"
             )
 
-    emp = Employee(**emp_in.model_dump())
-    db.add(emp)
-    await db.commit()
+    employee_role = None
+    if emp_in.login_password is not None:
+        account = (await db.execute(
+            select(UserAccount).where(UserAccount.login_email == str(emp_in.email))
+        )).scalar_one_or_none()
+        if account:
+            raise HTTPException(status_code=409, detail="Email đăng nhập đã tồn tại")
+        employee_role = (await db.execute(
+            select(Role).where(Role.role_code == "EMPLOYEE")
+        )).scalar_one_or_none()
+        if not employee_role:
+            raise HTTPException(status_code=400, detail="Chưa có quyền EMPLOYEE. Vui lòng khởi tạo dữ liệu mẫu.")
+
+    emp = Employee(**emp_in.model_dump(exclude={"login_password"}))
+    try:
+        db.add(emp)
+        await db.flush()
+        if emp_in.login_password is not None:
+            account = UserAccount(
+                employee_id=emp.employee_id,
+                login_email=str(emp_in.email),
+                password_hash=get_password_hash(emp_in.login_password),
+                is_active=emp.employment_status == "ACTIVE",
+            )
+            db.add(account)
+            await db.flush()
+            db.add(UserRoleAssignment(
+                user_account_id=account.user_account_id,
+                role_id=employee_role.role_id,
+            ))
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail="Mã nhân viên hoặc email đã tồn tại")
 
     # Reload with relationships
     stmt_load = select(Employee).where(Employee.employee_id == emp.employee_id).options(

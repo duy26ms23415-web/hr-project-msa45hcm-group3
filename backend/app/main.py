@@ -34,3 +34,9 @@ async def health_check():
 
 # Include all v1 API routers
 app.include_router(api_router, prefix=settings.API_V1_PREFIX)
+
+# Docker copies the React production build to /app/static.
+# Local API-only development continues to use the separate Vite server.
+from app.frontend import mount_frontend
+
+mount_frontend(app)

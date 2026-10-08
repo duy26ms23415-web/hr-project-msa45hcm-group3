@@ -65,13 +65,14 @@ export const EmployeesPage: React.FC = () => {
   const fetchMetadata = async () => {
     try {
       const [deptRes, posRes] = await Promise.all([
-        api.get('/departments/departments').catch(() => ({ data: [] })),
-        api.get('/departments/positions').catch(() => ({ data: [] })),
+        api.get('/departments'),
+        api.get('/positions'),
       ]);
       setDepartments(deptRes.data);
       setPositions(posRes.data);
     } catch (e) {
       console.error(e);
+      message.error('Không tải được danh sách phòng ban và chức danh. Vui lòng tải lại trang.');
     }
   };
 
@@ -88,6 +89,7 @@ export const EmployeesPage: React.FC = () => {
         full_name: values.full_name,
         email: values.email,
         phone_number: values.phone_number,
+        login_password: values.login_password,
         department_id: values.department_id,
         position_id: values.position_id,
         manager_employee_id: values.manager_employee_id || null,
@@ -102,12 +104,13 @@ export const EmployeesPage: React.FC = () => {
         qr_code_value: `${res.data.employee_code}_QR_STATIC`,
       }).catch(() => null);
 
-      message.success('Thêm nhân viên và tạo thẻ QR chấm công thành công!');
+      message.success('Đã thêm nhân viên và cấp tài khoản đăng nhập bằng email công ty.');
       setAddModalOpen(false);
       form.resetFields();
       fetchEmployees();
     } catch (err: any) {
-      message.error(err.response?.data?.detail || 'Lỗi khi thêm nhân viên!');
+      const detail = err.response?.data?.detail;
+      message.error(typeof detail === 'string' ? detail : 'Lỗi khi thêm nhân viên. Vui lòng kiểm tra thông tin.');
     } finally {
       setSubmitting(false);
     }
@@ -269,6 +272,24 @@ export const EmployeesPage: React.FC = () => {
             <Input placeholder="name@hrgroup3.com" />
           </Form.Item>
 
+          <Form.Item
+            name="login_password"
+            label="Mật khẩu đăng nhập portal"
+            extra="Nhân viên dùng email công ty ở trên và mật khẩu này để đăng nhập với quyền Nhân viên."
+            rules={[
+              { required: true, message: 'Vui lòng nhập mật khẩu!' },
+              { min: 8, message: 'Mật khẩu cần ít nhất 8 ký tự.' },
+              {
+                validator: (_, value) =>
+                  !value || new TextEncoder().encode(value).length <= 72
+                    ? Promise.resolve()
+                    : Promise.reject(new Error('Mật khẩu không được vượt quá 72 byte UTF-8.')),
+              },
+            ]}
+          >
+            <Input.Password autoComplete="new-password" placeholder="Ít nhất 8 ký tự" />
+          </Form.Item>
+
           <Form.Item name="phone_number" label="Số điện thoại">
             <Input placeholder="0901234567" />
           </Form.Item>
@@ -324,7 +345,7 @@ export const EmployeesPage: React.FC = () => {
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20 }}>
             <Button onClick={() => setAddModalOpen(false)}>Hủy</Button>
             <Button type="primary" htmlType="submit" loading={submitting}>
-              Tạo nhân viên & Cấp QR
+              Tạo nhân viên & Tài khoản
             </Button>
           </div>
         </Form>
