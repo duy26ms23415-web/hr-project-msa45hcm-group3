@@ -1,5 +1,54 @@
 # SOFTWARE ARCHITECTURE DOCUMENT (SAD)
+
+Parser nháp xử lý lượt thu thập reason trước bộ nhận dạng ngày/buổi/giờ; phần lý do được tách khỏi nội dung yêu cầu khi nhập gộp. Validator PDF duyệt toàn bộ đồ thị dictionary/array và giải tham chiếu gián tiếp bằng stack, dùng tập object đã thăm để chống vòng lặp và tránh giới hạn đệ quy. Kiểm tra bao gồm AcroForm/Fields, XFA, Outlines và chuỗi action; không giải mã stream để tìm từ khóa.
+
+Provider Gemini là opt-in qua `GEMINI_ENABLED` (mặc định false). Hai nhánh gọi provider giới hạn đầu ra 128/384 token, câu hỏi đã redaction tối đa 600 ký tự, tổng nguồn tối đa 4.000 ký tự; SDK đặt `retry=None`, timeout 5 giây. Không gọi provider cho fallback chuẩn. Đây là giới hạn mỗi lần gọi, chưa phải hạn mức token mỗi ngày.
+
 ## HỆ THỐNG QUẢN LÝ NHÂN SỰ & CHẤM CÔNG THÔNG MINH (GROUP 3 HRMS)
+
+Scope creation được resolve tường minh: mặc định SELF, ngoại lệ HEADCOUNT/approval/payroll summary theo capability. Scope SELF/DIRECT_REPORTS cần employee linkage; approval queue từ chối scope khác thay vì âm thầm đổi. Failed run không bị preview làm mất trạng thái. Leave draft lookup quota theo leave_date.year. [Acceptance matrix](AI_ACCEPTANCE.md) phân biệt unit/static, UI fixture và DB evidence; browser harness thực dùng local worker và API fixture, chưa chứng minh DB authorization.
+
+Types frontend AI/report được dùng chung; discriminated action union thay data Any ở chat. Resolver suggestion_report_defaults cung cấp default_inputs và tham số khởi tạo cùng nguồn; input người dùng chỉ ghi trường cho phép, catalog kiểm scope/kind trước DB. UI fallback gợi ý dùng actor capabilities, không cấp quyền. Lỗi blob đọc JSON envelope có giới hạn 64 KiB; redirect 401 giữ SESSION_EXPIRED trên login, kiosk vẫn không bị redirect.
+
+PayrollLine.currency_code là snapshot nullable với constraint ba chữ cái uppercase; calculation lưu active_comp.currency_code, report không đọc lại compensation để suy ra tiền tệ. Migration d9e0f1a2b3c4 không backfill giả cho legacy. MY_PAYSLIP/PAYROLL_SUMMARY từ chối mã thiếu/sai, nhóm theo department/currency và Excel summary tách tiền tệ. Không đổi công thức tính, tax hay kỳ phát hành APPROVED/CLOSED; tính lương phi VND chưa được nghiệm thu. DB upgrade/legacy verification còn thiếu.
+
+Suggestion reference được ánh xạ theo thao tác tới LEAVE.REQUEST/REPORT.CATALOG/REPORT.ACCESS, kiểm lại PUBLISHED, effective, answerable và minimum_role của cả document/version. Server thêm nhãn tham khảo vào prompt, dispatch dùng suggestion_id để tránh diễn giải nhãn. PDF demo có internal bookmarks và mục lục không lặp nguyên heading để viewer highlight đúng heading nội dung. Generator kiểm số trang/bookmark/heading bằng pypdf trước ghi manifest hash và tạo bản Markdown đồng bộ; upload/seed dùng parser bảo mật. Report expiry chỉ trả 410 sau khi lookup owner; UUID không thuộc owner vẫn 404.
+
+Cleanup CLI đọc storage references của mọi owner/state, chỉ xét artifacts theo regex UUID server, không symlink và mtime quá hai giờ (lớn hơn TTL một giờ và deadline tạo). Orphan scan không xóa; --apply mới xóa rồi dọn metadata quá 30 ngày đã hết hạn, không còn keys. Không quét root ngoài REPORT_STORAGE_DIR. Nếu DB không đọc được references thì không dọn orphan. Trạng thái FAILED được giữ trong cửa sổ lịch sử; job chưa chạy với DB thực.
+
+`core/ai_errors.py` cài middleware và exception handlers cho đường dẫn AI/reports. Mỗi request có UUID server, chia sẻ qua ContextVar với audit, trả trong header/body; không tin X-Request-ID đầu vào. Catalog chuẩn hóa lỗi xác thực/quyền/nháp/provider/dữ liệu, giữ status và legacy detail có mã giới hạn. Validation không echo request body; exception không trả nội dung DB/đường dẫn. Ngoài namespace này giữ HTTP/validation handler mặc định. Responses lỗi private/no-store, action null, sources rỗng; UI ưu tiên message của backend và xóa action cũ khi bắt đầu lượt mới. Chat schema yêu cầu revision khi tiếp tục nháp, nhận operation cấu trúc không cần text giả.
+
+`AIReportDraftService` dùng cùng bảng nháp và row lock của `AIDraftService`, command DRAFT_REPORT chỉ nhận kind/start_date/end_date/scope/department_id. Danh tính, danh sách employee và đường dẫn template không phải input. Catalog tạo các lựa chọn kind/scope theo actor; quyền được kiểm trước tạo/cập nhật nháp và lại tại ReportRunService. Khi đủ trường, ReportRunCreate kiểm kỳ rồi service tạo snapshot thật; nháp chuyển READY. Phân loại Gemini chỉ chọn kind từ enum, còn kỳ/phạm vi do parser/input có kiểu thu thập. UI nhận `input_options` có field/value/label, không coi nút lựa chọn là cấp quyền. Không cần migration mới; nghiệm thu DB nhiều lượt còn thiếu.
+
+Dispatch giữ nhận diện câu hỏi chính sách từ registry sau khi canonicalize prompt; nguồn không còn answerable/effective/readable trả KNOWLEDGE_NOT_FOUND trước intent classifier. Ba prompt chính sách nhập nguyên văn cũng dùng cùng fallback. Kiểm tra employee linkage áp dụng cho thao tác dữ liệu cá nhân, còn đọc chính sách kiểm quyền tài liệu.
+
+`ReportRunService` ghi lifecycle bằng session riêng để rollback truy vấn nghiệp vụ không xóa trạng thái thất bại. Chốt danh sách employee IDs trước truy vấn rồi giao với scope được xác thực trong từng SQL; không mở rộng snapshot khi quan hệ nhân sự thay đổi. Chỉ ghi READY sau khi cả hai artifacts được lưu; lỗi giữ mã an toàn trong FAILED và dọn file đã tạo. Khi DB mất kết nối, có thể không lưu được FAILED; API vẫn trả lỗi, không trả READY. Cleanup giữ FAILED, chuyển READY/GENERATING quá hạn thành EXPIRED; metadata lịch sử chỉ hiển thị trong 30 ngày. Cleanup CLI mặc định dry-run, xóa khi có `--apply`. Không cần migration mới cho lifecycle này; DB concurrency chưa được xác minh.
+
+**Trạng thái AI hiện tại:** JWT xác định actor/role/owner; history không nhận role system. Draft owner/revision/TTL/row lock và typed validation chỉ tạo dữ liệu trong form. Gemini phân loại enum sau fallback, nhận input đã giảm PII, không nhận history/DB rows; quotes phải nguyên văn trong section PUBLISHED/effective/answerable được cấp quyền. PDF private có version/section/publish/archive và viewer xác thực. `ReportService` lọc scope trước aggregation, `ReportRunService` lưu snapshot/XLSX private một giờ và kiểm lại owner/scope lúc xem/tải. Có bảy loại report, bảy file template v1 cố định, giới hạn 10.000 dòng và bảo toàn Decimal lớn bằng text chính xác. MY_PAYSLIP chỉ SELF; PAYROLL_SUMMARY chỉ HR/ADMIN, nhóm phòng ban hiện tại; chỉ kỳ APPROVED/CLOSED, không tính lại lương. PayrollLine lưu mã tiền tệ từ hồ sơ nguồn khi tính; report tách tổng theo currency snapshot, dòng legacy chưa xác minh bị từ chối. Responses `private, no-store`; UI preview/download trong chat và cleanup đã có. SQLAlchemy ẩn tham số log. Migration/seed và browser flows chưa có bằng chứng tích hợp. Xem [AI Copilot](AI_COPILOT.md).
+
+Migration `b7c8d9e0f1a2` thêm `hr_ai_knowledge_document_versions`, `hr_ai_knowledge_sections`, `hr_ai_chat_drafts` và `hr_report_runs`. Cột legacy được giữ; mỗi tài liệu cũ được backfill thành version `LEGACY_TEXT` với page null, section không có PDF thì không tự nhận citation PDF. Draft và report run lưu owner, expiry; run giữ scope snapshot và storage key private. Migration mới chỉ render offline; chưa xác minh upgrade trên DB test.
+
+`ReportRunService` là đường tạo snapshot/XLSX chung cho chat fallback và API báo cáo. Action `OPEN_REPORT` có `run_id` khi file đã tạo thành công; ChatReportPreview fetch lại run bằng JWT để hiển thị đúng snapshot. Nháp đầy đủ ngay từ đầu cũng đi qua cùng state machine và validation như nháp nhiều lượt, không làm mất lý do. Client gửi `draft_revision`; revision cũ trả 409. Tài liệu trả fallback trước, chỉ gọi provider để xử lý yêu cầu tóm tắt/giải thích/so sánh có nguồn, JSON quotes dùng schema đóng.
+
+Migration `c8d9e0f1a2b3` thêm `hr_ai_request_events`. `secured_operation` ghi audit thành công/từ chối/lỗi, dùng request ID chung cho chat và report con. Budget được commit độc lập trước truy vấn nghiệp vụ; PostgreSQL transaction advisory lock theo actor/channel serialize các process, đếm cửa sổ 60 giây (20 CHAT, 5 REPORT). Audit chỉ nhận enum và command token, không lưu nội dung người dùng. Kho audit/budget lỗi thì fail closed với `DATA_SERVICE_UNAVAILABLE`. Query budget dùng statement timeout 10 giây/lock timeout 5 giây; luồng chat và truy vấn ReportRun có deadline 30 giây. Retention 90 ngày bằng script dry-run/`--apply`. Chưa xác minh cơ chế nhiều process trên DB test. Phát hành phiếu lương/tổng hợp chỉ ở APPROVED hoặc CLOSED theo quyết định D01.
+
+Bảy templates đọc bằng kind cố định từ `backend/app/report_templates`, không dùng path do client/model gửi. Money giữ Decimal trong query/aggregation; Excel dùng text chính xác khi quá 15 chữ số. PayrollLine có currency snapshot; không suy đoán mã cho dòng legacy chưa lưu. Tổng Excel tách theo currency. Static migration SQL đã render tới `c8d9e0f1a2b3`; 63 tests dùng mock đạt và frontend build đạt. Migration/seed, SQL scope thực thi, multi-process budget và browser flows còn phải kiểm chứng trên môi trường test.
+
+`ai_suggestions.py` là registry dùng chung cho list và dispatch: ID resolve prompt chuẩn, role và điều kiện có employee được kiểm lại trước handler. Inputs draft có schema key/value theo command; action wire shape cũ có validator theo discriminator, khóa route, period, ID, enum và extra keys. Chat trả status/missing_fields/message_code/request_id để UI chọn field/hủy draft; audit và response dùng chung request ID. Lý do khám bệnh không suy ra SICK. Nội quy không có nguồn trả KNOWLEDGE_NOT_FOUND; chat trái quyền dùng HTTP 403.
+
+`report_catalog.py` đọc cột từ bảy template được cố định theo kind, cache riêng metadata template và lọc capabilities của actor ở mỗi request; không cache quyền theo user. Catalog có scopes/filter/period_rule/default_scope; UI lấy danh sách loại/phạm vi ở server. History giữ cửa sổ hiển thị 30 ngày, keyset cursor theo `(created_at, run_id)` giảm dần; cursor được validate và không thay owner predicate. Cleanup khi mở lịch sử chỉ xử lý run của owner, script định kỳ xử lý toàn bộ. Preview phân trang trên snapshot đã được authorize đầy đủ; cả page và file đều kiểm current scope. Catalog/history/preview dùng private/no-store, file có alias `/file`. Report draft truyền initial filters vào interpreter và parser để chọn kỳ theo kind. Preview được remount theo run_id, reset phân trang và dữ liệu khi đổi snapshot.
+
+Knowledge DRAFT editor khóa document rồi version, kiểm cả minimum_role hiện tại, chỉ sửa trạng thái DRAFT. Metadata và sections có thể lưu trong một transaction; section content do parser lấy từ PDF, client chỉ cung cấp heading/trang/answerable. Validate hash/page/heading trước khi thay mapping; PUBLISHED giữ section IDs và nội dung bất biến. Preview query chỉ dành cho HR/ADMIN, kiểm document/version, vẫn chặn ARCHIVED; list version và source SQL lọc minimum_role từng bản. File đọc lại SHA-256 trước phục vụ. Những mục is_answerable=false chỉ xuất hiện trong preview quản trị, không vào public citation/RAG.
+
+Upload `/ai/knowledge/{document_id}/versions` kiểm tra PDF thật bằng pypdf (10 MiB/100 trang, không mã hóa, active action, link ngoài hay embedded files), trích text server-side và yêu cầu mapping heading/page khớp. File dùng UUID `.pdf` dưới `backend/storage/private/ai-knowledge`, ghi staging rồi rename; storage key không trả cho client và không mount static. File/section API kiểm tra JWT, document/version/section status và cả hai mức quyền; response `private, no-store`. Frontend lấy bytes bằng API client có Bearer JWT và render bằng PDF.js worker đã bundle local; viewer tô sáng heading khớp text item. Chưa có kiểm tra browser thực tế hoặc DB migration trên test DB.
+
+`GET /api/v1/ai/suggestions` tạo gợi ý dựa trên role của user đã xác thực. Gợi ý nội quy chỉ được thêm nếu truy vấn tìm thấy section answerable thuộc document/version đã publish, trong effective date và trong quyền đọc; viewer URL được tạo từ khóa section phía server. Gợi ý role-based chỉ là UI affordance, còn từng lệnh/endpoint vẫn kiểm tra capability. Process chat xác định intent trước khi tải context cá nhân; chỉ các handler tra cứu/soạn đơn hợp lệ mới truy vấn dữ liệu công/phép của chính user. Các shortcut dùng enum allowlist: report điền loại và kỳ hiện tại, approvals mở tab PENDING, knowledge mở màn quản trị. Không có thao tác gửi/duyệt từ chat. Network, permission và provider errors dùng message catalog chung.
+
+Reports hỗ trợ bảy kind qua `GET /api/v1/reports` và `POST /api/v1/reports/runs`. Tạo run ghi preview JSON và XLSX vào `REPORT_STORAGE_DIR` dưới khóa UUID, lưu owner/scope/filter/template version/employee ID snapshot/expiry trong `hr_report_runs`. Preview và download yêu cầu JWT của owner, kỳ còn hạn, hash XLSX hợp lệ và kiểm tra lại quyền hiện thời; ID ngoài scope không được trả về client. TTL một giờ; list history dọn artifacts hết hạn khi chạy, script `backend/scripts/cleanup_expired_report_runs.py --apply` có thể được lập lịch để dọn cả khi không có request và cập nhật trạng thái. Workbook có ba sheet; chỉ số dùng kiểu số, trường text chống formula injection. Không mount report storage static.
+
+Ba tài liệu PDF ví dụ và `manifest.json` được tạo vào `backend/storage/tmp/ai-knowledge-demo` bằng `backend/scripts/generate_demo_knowledge.py`. Chúng là bản nháp chưa được phê duyệt; nguồn pháp luật được dẫn riêng trong tài liệu nghỉ phép, còn quy trình nội bộ được ghi là đề xuất. `backend/scripts/seed_demo_knowledge.py` chỉ chạy khi `ENVIRONMENT` là development/test và cần cờ xác nhận cùng ID tài khoản active; seed tạo document/version/section ở DRAFT, chuyển PDF vào storage private, không publish và không ghi đè document đã có nội dung khác.
+
+Danh sách leave/fix có `view=mine|approvals|visible`. `approvals` join employee với `manager_employee_id` hiện tại và chỉ lấy trạng thái PENDING; không dựa vào `reviewer_employee_id`. Dịch vụ duyệt khóa hàng employee bằng `FOR UPDATE`, kiểm tra lại quan hệ trực tiếp trước mutation và commit, từ chối tự duyệt, không có ADMIN bypass. HR được duyệt khi là quản lý trực tiếp.
 
 ---
 
@@ -25,7 +74,7 @@ Hệ thống giải quyết trọn vẹn nghiệp vụ quản trị nhân sự n
 2. **Stateless Backend:** Backend FastAPI hoàn toàn không lưu trạng thái phiên (session state) trên bộ nhớ RAM, xác thực hoàn toàn qua JWT (JSON Web Tokens).
 3. **Async I/O non-blocking:** Tận dụng tối đa `asyncio` và `asyncpg` để phục vụ hàng ngàn kết nối đồng thời với mức tiêu hao tài nguyên thấp.
 4. **Idempotency & Data Integrity:** Đảm bảo mọi thao tác quẹt thẻ, tính lương, và duyệt đơn đều có tính lũy đẳng, chống ghi trùng lặp và bảo toàn tính nhất quán dữ liệu ACID.
-5. **AI Fault-Tolerance (Non-blocking AI Calls):** Gọi LLM ngoài (Google Gemini) qua luồng worker riêng biệt (`asyncio.to_thread`) với cơ chế ngắt thời gian chờ (timeout 5s) và bộ dự phòng luật cục bộ (rule-based fallback), đảm bảo server không bao giờ bị nghẽn Event Loop.
+5. **AI Fault-Tolerance:** Gọi Gemini qua `generate_content_async` với timeout 5 giây; handler xác định và trích nguồn có sẵn được ưu tiên. Nếu không có fallback cho câu hỏi HR tự do và provider lỗi, trả `AI_UNAVAILABLE`.
 
 ---
 
@@ -168,17 +217,28 @@ graph TD
 * **Báo cáo Excel:** Sử dụng thư viện `openpyxl` tạo bảng tính định dạng chuẩn kế toán (tiêu đề, kẻ bảng, in đậm, căn lề, định dạng tiền tệ Việt Nam VNĐ) và truyền trực tiếp qua luồng bộ nhớ `StreamingResponse`.
 
 ##### d. AI Assistant Service (`ai_service.py`)
+
+Gợi ý câu hỏi trong dialog nằm trong menu mở theo yêu cầu; khi nháp đang hoạt động chỉ hiện input options của trường đang hỏi. Modal giới hạn chiều cao theo viewport, vùng tin nhắn cuộn riêng và giữ ô nhập trong khung nhìn.
+
+
+Chuẩn hóa ngày chạy trước bằng `requested_date`; `_draft_answers_with_date` dùng Gemini fallback cho riêng trường ngày ở lượt đầu hoặc khi đang hỏi ngày. Contract `AIChatDateResult` chỉ chấp nhận ngày ISO hoặc null, kiểm tra ngày lịch bằng Python; lỗi/timeout 5 giây trả về thiếu ngày. Payload chỉ gồm token thuộc từ vựng ngày và số nhỏ (tối đa 200 ký tự), cùng ngày hiện tại Asia/Ho_Chi_Minh; không kèm lý do, lịch sử hay dữ liệu DB. Parser không dùng câu trả lời chưa hiểu ở bước ngày làm lý do.
+
+ChatReportPreview đọc GET /reports/runs/{id} có phân trang và tải artifact Excel cùng snapshot. Chỉnh qua chat tạo run mới. Không có lịch sử tải/tab báo cáo. Workbook giữ ba sheet Thông tin/Dữ liệu/Tổng hợp và contract v1; ngày/giờ native Excel theo văn phòng, A4 fit-to-width, Table/print titles. Tiền lớn giữ text chính xác, không trộn currency.
+
+
+Schema dùng chung `MAX_AI_REPLY_CHARS = 8000` cho phản hồi và từng mục lịch sử, bảo đảm phản hồi hợp lệ có thể được gửi lại nguyên vẹn. Lexical RAG tính ngưỡng khớp từ nội dung chunk (35% token truy vấn), còn tiêu đề chỉ cộng điểm. PDF ingestion trong `knowledge_storage.py` kiểm tra giá trị action của từng sự kiện `/AA` và action nối tiếp `/Next`; resolve tham chiếu gián tiếp và dùng tập object đã duyệt để tránh vòng lặp.
+
 * **Kiến trúc Hybrid (RAG + Rule Engine + Non-blocking Fallback):**
   1. *Phát hiện ý định (Intent Detection):* Bóc tách câu hỏi tra cứu phép, ngày công, hoặc soạn nháp đơn bằng Regex/Pattern matching.
-  2. *Truy xuất dữ liệu ngữ cảnh (Context Injection):* Nạp số dư phép thực tế, các ngày thiếu công trong tháng của chính nhân viên đang đăng nhập.
+  2. *Truy xuất dữ liệu:* Chỉ handler tra cứu/nháp của bản thân tải công/phép cần thiết. RAG và provider không nhận dữ liệu cá nhân từ DB.
   3. *Tương tác Gemini LLM an toàn:*
      ```python
      response = await asyncio.wait_for(
-         asyncio.to_thread(_call_gemini_blocking),
+         model.generate_content_async(prompt, request_options={"timeout": 5}),
          timeout=5.0
      )
      ```
-     Nếu không có internet, API key sai hoặc phản hồi chậm quá 5s, hệ thống lập tức kích hoạt bộ chính sách dự phòng nội bộ, đảm bảo tính liên tục 100%.
+     Nếu provider không khả dụng, trả fallback nguồn đã được cấp quyền hoặc `AI_UNAVAILABLE` khi không có handler phù hợp; không tạo số liệu giả.
 
 ---
 
@@ -357,7 +417,7 @@ Chịu trách nhiệm thẩm định (Validation), lọc bỏ dữ liệu nhạy
 * **[`ai_service.py`](file:///Users/andyhoang/Projects/hr-project-msa45hcm-group3/backend/app/services/ai_service.py):**
   * Kiến trúc Hybrid kết hợp **Retrieval-Augmented Generation (RAG)** và **Non-blocking Rule Engine**.
   * Bóc tách ý định người dùng (hỏi chính sách nghỉ, tra cứu số dư phép, kiểm tra ngày thiếu công, hỗ trợ tạo nháp đơn).
-  * Gọi Google Gemini LLM thông qua `asyncio.to_thread` kèm timeout 5 giây; tự động kích hoạt bộ chính sách dự phòng nội bộ nếu mất kết nối internet, đảm bảo server không bao giờ bị nghẽn.
+  * Gọi Gemini bằng async API, timeout 5 giây; ưu tiên fallback xác định và chỉ dùng đoạn nguồn được cấp quyền.
 
 ##### 5. Tầng Giao tiếp API & Kiểm soát Phân quyền (`backend/app/api/`)
 * **[`deps.py`](file:///Users/andyhoang/Projects/hr-project-msa45hcm-group3/backend/app/api/deps.py):** Cung cấp các Dependency:
@@ -470,3 +530,37 @@ sequenceDiagram
     Client-->>Kiosk: Dữ liệu thành công
     Note over Kiosk: Phát âm thanh bíp • Bắn pháo hoa Confetti<br/>Hiện thông báo CHECK_OUT & tổng giờ làm
 ```
+
+### QR schema alignment for seed
+
+Migration `e0f1a2b3c4d5` follows `d9e0f1a2b3c4` and adds `hr_qr_cards.card_code VARCHAR(255) NULL` to match the existing QRCard model, without backfilling old cards. Seed uses one transaction: a QR query failure rolls back new accounts as well. This migration only aligns the schema; QR authentication behavior is unchanged.
+
+
+## Kiến trúc AI chatbox và công cụ
+
+Giữ convention Router → Service/ORM → Model của dự án, không thêm Repository/framework agent. AIService là Facade điều phối, provider là Adapter, công cụ là service một trách nhiệm. Protocol interpreter cho phép thay adapter mà không đổi nghiệp vụ; không cần hệ phân cấp kế thừa cho các hành động khác nhau.
+
+| Thành phần | Trách nhiệm |
+| --- | --- |
+| API ai + schema ai | JWT, request/response đóng, audit/rate limit |
+| AIService | Điều phối intent, hội thoại và công cụ; rule trước, Gemini khi cần |
+| ai_suggestions | Registry lệnh mẫu/capability; cùng resolver cho list và dispatch |
+| AIEmployeeTool | ORM số dư theo nhân viên/năm, công theo kỳ, loại nghỉ; preflight sớm |
+| AIKnowledgeTool | SQL lọc published/effective/role/answerable trước retrieval; citation/viewer |
+| AIDraftService | Owner/revision/typed params/TTL/state machine; không gửi đơn |
+| AIReportDraftService | Thu thập filter, kiểm quyền/kỳ, gọi ReportRunService; chỉnh run của owner |
+| ReportPromptInterpreter / GeminiReportInterpreter | Interface/adapter gợi ý filter; không DB hoặc thực thi command |
+| ReportService / ReportRunService | Scope trước aggregation, template cố định, snapshot/XLSX private |
+| AIChatModal / ChatReportPreview | Hội thoại, lựa chọn còn thiếu, preview 50 dòng/trang và tải snapshot |
+
+Luồng: Chat → API xác thực/validation/audit → AIService → Python nhận dạng hoặc Gemini adapter → backend kiểm tham số/quyền → công cụ/service ORM theo actor → response dữ liệu + nguồn, nháp hoặc run_id.
+
+DB không trở thành prompt nguyên bảng. Python lấy dữ liệu theo JWT và tổng hợp thành kết quả xác định. Gemini không cấp quyền, chọn employee ID, chạy SQL, đổi template path hoặc tự gửi/duyệt đơn. User/history/tài liệu là dữ liệu không đáng tin.
+
+Ngày/bộ lọc phổ biến xử lý tại Python. Date fallback gửi tối đa 200 ký tự từ vựng ngày đã lọc; report fallback gửi tối đa 600 ký tự yêu cầu, today HCM, kind/scope/date hiện tại và danh sách template/scope khả dụng. Không gửi DB rows, account hoặc history cho report interpreter. Output chỉ kind/scope/start_date/end_date, kiểm schema/enum/calendar rồi kiểm nghiệp vụ; timeout 5 giây, không retry. Lỗi diễn giải dùng rule và hỏi phần thiếu. Policy quote fallback hiện có chỉ nhận nguồn đã lọc quyền và phải khớp trích dẫn nguyên văn.
+
+Chỉnh báo cáo gửi report_run_id; backend đọc filters đã lưu theo owner, không tin filter cũ do client tự khai. Run phải READY/còn hạn. Filter mới kiểm quyền/kỳ lại rồi tạo run mới; preview/download kiểm quyền hiện tại và scope snapshot. Chỉnh giới hạn trong filter/template sẵn có, không sửa công thức lương.
+
+Upload một bước POST /api/v1/ai/knowledge/upload: HR/Admin, validate PDF trước ghi, tạo document DRAFT + version đầu + section mỗi trang có text. Tải version mới không thay bản published cho tới khi công bố. Quyền mặc định EMPLOYEE, tùy chọn thu hẹp; HR không nâng tới ADMIN. File private/hash, kiểm active content gồm AA/Next. Không thêm migration cho flow này.
+
+Nhận dạng số dư dùng chung is_leave_balance_query cho tra cứu và hỏi xen trong draft; alias ngày nghỉ/ngày phép giữ nguyên guard danh tính JWT, không thay thế câu hỏi policy/report. Parser báo cáo xử lý tháng sau/tháng tới tại Python theo today HCM, monthrange giữ đúng giao năm/năm nhuận; adapter không gọi provider nếu kỳ đã xác định. Reply định dạng ngày DD/MM/YYYY và scope tiếng Việt, action vẫn giữ contract ISO/enum.
