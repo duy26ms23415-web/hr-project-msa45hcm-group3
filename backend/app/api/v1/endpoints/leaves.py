@@ -1,5 +1,5 @@
 from datetime import date
-from typing import List, Optional
+from typing import List, Optional, Literal
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
@@ -9,11 +9,13 @@ from app.core.database import get_db
 from app.api.deps import get_current_user, require_roles
 from app.models.auth import UserAccount
 from app.models.leave import LeaveType, LeaveRequest, EmployeeLeaveBalance
+from app.models.organization import Employee
 from app.schemas.leave import (
     LeaveTypeResponse, LeaveBalanceResponse,
     LeaveRequestCreate, LeaveRequestReview, LeaveRequestResponse
 )
 from app.services.leave_service import LeaveService
+from app.services.ai_access import require_known_role, require_reviewer_role
 
 router = APIRouter()
 
@@ -76,11 +78,14 @@ async def submit_leave_request(
 @router.get("/requests", response_model=List[LeaveRequestResponse])
 async def list_leave_requests(
     status_filter: Optional[str] = Query(None, alias="status"),
+    view: Literal["mine", "approvals", "visible"] = "mine",
     db: AsyncSession = Depends(get_db),
     current_user: UserAccount = Depends(get_current_user)
 ):
     """List leave requests (Employee views own, Manager views subordinate's)"""
     user_roles = [ra.role.role_code for ra in current_user.role_assignments]
+    role_set = set(user_roles)
+    require_known_role(role_set)
     stmt = (
         select(LeaveRequest)
         .options(
@@ -90,15 +95,23 @@ async def list_leave_requests(
         .order_by(LeaveRequest.created_at.desc())
     )
 
-    if "ADMIN" in user_roles or "HR" in user_roles:
-        pass
-    elif "MANAGER" in user_roles:
-        stmt = stmt.where(
-            (LeaveRequest.employee_id == current_user.employee_id) |
-            (LeaveRequest.reviewer_employee_id == current_user.employee_id)
+    if view == "mine":
+        stmt = stmt.where(LeaveRequest.employee_id == current_user.employee_id)
+    elif view == "approvals":
+        require_reviewer_role(role_set)
+        if status_filter not in (None, "PENDING"):
+            raise HTTPException(status_code=422, detail="Approvals view only lists pending requests")
+        stmt = stmt.join(Employee, Employee.employee_id == LeaveRequest.employee_id).where(
+            Employee.manager_employee_id == current_user.employee_id,
+            LeaveRequest.status == "PENDING",
         )
     else:
-        stmt = stmt.where(LeaveRequest.employee_id == current_user.employee_id)
+        if not set(user_roles) & {"ADMIN", "HR", "MANAGER"}:
+            raise HTTPException(status_code=403, detail="AI_ACCESS_DENIED")
+        if not set(user_roles) & {"ADMIN", "HR"}:
+            stmt = stmt.join(Employee, Employee.employee_id == LeaveRequest.employee_id).where(
+                Employee.manager_employee_id == current_user.employee_id
+            )
 
     if status_filter:
         stmt = stmt.where(LeaveRequest.status == status_filter)
@@ -115,12 +128,10 @@ async def approve_leave_request(
     current_user: UserAccount = Depends(get_current_user)
 ):
     """Direct Manager approves leave request"""
-    user_roles = [ra.role.role_code for ra in current_user.role_assignments]
-    is_admin = "ADMIN" in user_roles
-
+    require_reviewer_role({ra.role.role_code for ra in current_user.role_assignments})
     review_in.status = "APPROVED"
     req = await LeaveService.review_leave_request(
-        db, request_id, current_user.employee_id, review_in, is_admin=is_admin
+        db, request_id, current_user.employee_id, review_in
     )
     await db.commit()
     
@@ -136,12 +147,10 @@ async def reject_leave_request(
     current_user: UserAccount = Depends(get_current_user)
 ):
     """Direct Manager rejects leave request"""
-    user_roles = [ra.role.role_code for ra in current_user.role_assignments]
-    is_admin = "ADMIN" in user_roles
-
+    require_reviewer_role({ra.role.role_code for ra in current_user.role_assignments})
     review_in.status = "REJECTED"
     req = await LeaveService.review_leave_request(
-        db, request_id, current_user.employee_id, review_in, is_admin=is_admin
+        db, request_id, current_user.employee_id, review_in
     )
     await db.commit()
     

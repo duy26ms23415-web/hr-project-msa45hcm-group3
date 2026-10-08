@@ -264,21 +264,23 @@ class AttendanceService:
         db: AsyncSession,
         fix_id: int,
         reviewer_employee_id: int,
-        review_in: AttendanceFixReview,
-        is_admin: bool = False
+        review_in: AttendanceFixReview
     ) -> AttendanceFix:
-        """Review attendance fix. Must be the employee's direct manager or admin."""
-        stmt = select(AttendanceFix).where(AttendanceFix.attendance_fix_id == fix_id).options(
-            selectinload(AttendanceFix.employee)
-        )
+        """Review attendance fix. Only the employee's direct manager may review."""
+        stmt = select(AttendanceFix).where(AttendanceFix.attendance_fix_id == fix_id)
         fix = (await db.execute(stmt)).scalar_one_or_none()
         if not fix:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Attendance fix request not found")
         if fix.status != "PENDING":
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Request is already {fix.status}")
 
-        # Manager authority check
-        if not is_admin and fix.employee.manager_employee_id != reviewer_employee_id:
+        # Lock the employee row so reassignment cannot race the authorization check and commit.
+        employee = (await db.execute(
+            select(Employee).where(Employee.employee_id == fix.employee_id).with_for_update()
+        )).scalar_one_or_none()
+        if not employee:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Employee not found")
+        if fix.employee_id == reviewer_employee_id or employee.manager_employee_id != reviewer_employee_id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Only the direct manager can approve or reject this attendance fix"

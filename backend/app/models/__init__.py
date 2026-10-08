@@ -5,6 +5,8 @@ from app.models.holiday import Holiday
 from app.models.attendance import QRCard, AttendanceEvent, AttendanceDay, AttendanceFix
 from app.models.leave import LeaveType, EmployeeLeaveBalance, LeaveRequest
 from app.models.payroll import EmployeeCompensation, PayrollPeriod, PayrollLine
+from app.models.knowledge import KnowledgeDocument, KnowledgeDocumentVersion, KnowledgeSection, AIChatDraft, ReportRun
+from app.models.ai_security import AIRequestEvent
 
 __all__ = [
     "Base",
@@ -25,4 +27,10 @@ __all__ = [
     "EmployeeCompensation",
     "PayrollPeriod",
     "PayrollLine",
+    "KnowledgeDocument",
+    "KnowledgeDocumentVersion",
+    "KnowledgeSection",
+    "AIChatDraft",
+    "ReportRun",
+    "AIRequestEvent",
 ]

@@ -107,15 +107,13 @@ class LeaveService:
         db: AsyncSession,
         leave_request_id: int,
         reviewer_employee_id: int,
-        review_in: LeaveRequestReview,
-        is_admin: bool = False
+        review_in: LeaveRequestReview
     ) -> LeaveRequest:
         """Manager approves or rejects leave request and updates leave balance if approved"""
         stmt = (
             select(LeaveRequest)
             .where(LeaveRequest.leave_request_id == leave_request_id)
             .options(
-                selectinload(LeaveRequest.employee),
                 selectinload(LeaveRequest.leave_type)
             )
         )
@@ -125,8 +123,13 @@ class LeaveService:
         if req.status != "PENDING":
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Request is already {req.status}")
 
-        # Manager authority check
-        if not is_admin and req.employee.manager_employee_id != reviewer_employee_id:
+        # Lock the employee row so reassignment cannot race the authorization check and commit.
+        employee = (await db.execute(
+            select(Employee).where(Employee.employee_id == req.employee_id).with_for_update()
+        )).scalar_one_or_none()
+        if not employee:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Employee not found")
+        if req.employee_id == reviewer_employee_id or employee.manager_employee_id != reviewer_employee_id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Only the direct manager can approve or reject this leave request"

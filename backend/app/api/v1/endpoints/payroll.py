@@ -129,7 +129,7 @@ async def get_payroll_lines(
     db: AsyncSession = Depends(get_db),
     _ = Depends(require_roles(["HR", "ADMIN"]))
 ):
-    """Get calculated salary lines for all employees in the period"""
+    """HR/ADMIN preview calculated lines to review the period before release."""
     stmt = select(PayrollLine).where(PayrollLine.payroll_period_id == period_id)
     result = await db.execute(stmt)
     return result.scalars().all()
@@ -179,14 +179,14 @@ async def get_my_payslips(
     db: AsyncSession = Depends(get_db),
     current_user: UserAccount = Depends(get_current_user)
 ):
-    """Employee views their own calculated payslips"""
+    """Employee views their own released payslips"""
     stmt = (
         select(PayrollLine)
         .join(PayrollPeriod)
         .where(
             and_(
                 PayrollLine.employee_id == current_user.employee_id,
-                PayrollPeriod.status.in_(["CALCULATED", "APPROVED", "CLOSED"])
+                PayrollPeriod.status.in_(["APPROVED", "CLOSED"])
             )
         )
         .order_by(PayrollLine.calculated_at.desc())

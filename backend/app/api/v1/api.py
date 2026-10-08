@@ -8,6 +8,8 @@ from app.api.v1.endpoints import (
     leaves,
     payroll,
     ai,
+    knowledge,
+    reports,
 )
 
 api_router = APIRouter()
@@ -20,3 +22,5 @@ api_router.include_router(attendance.router, prefix="/attendance", tags=["Attend
 api_router.include_router(leaves.router, prefix="/leave", tags=["Leave Management"])
 api_router.include_router(payroll.router, prefix="/payroll", tags=["Payroll"])
 api_router.include_router(ai.router, prefix="/ai", tags=["AI Assistant"])
+api_router.include_router(knowledge.router, prefix="/ai/knowledge", tags=["AI Knowledge"])
+api_router.include_router(reports.router, prefix="/reports", tags=["Reports"])

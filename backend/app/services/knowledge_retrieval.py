@@ -1,0 +1,72 @@
+"""Deterministic lexical RAG without additional dependencies or external indexing."""
+import re
+import unicodedata
+from dataclasses import dataclass
+from collections.abc import Mapping
+
+
+STOP_WORDS = set("toi ban cua la va cho ve co gi the nao nhung mot trong duoc hay xin hoi cong ty quy dinh chinh sach".split())
+
+
+def normalize(text: str) -> str:
+    text = unicodedata.normalize("NFD", text.lower().replace("đ", "d"))
+    return "".join(char for char in text if unicodedata.category(char) != "Mn")
+
+
+def tokens(text: str) -> set[str]:
+    return set(re.findall(r"[a-z0-9]+", normalize(text))) - STOP_WORDS
+
+
+@dataclass
+class Passage:
+    document_id: int
+    title: str
+    content: str
+    source_url: str | None
+    version_id: int | None = None
+    section_id: int | None = None
+    section_code: str | None = None
+    heading: str | None = None
+    page_start: int | None = None
+    page_end: int | None = None
+
+
+def _field(record, name, default=None):
+    return record.get(name, default) if isinstance(record, Mapping) else getattr(record, name, default)
+
+
+def retrieve(question: str, documents, limit: int = 3) -> list[Passage]:
+    query = tokens(question)
+    if not query:
+        return []
+    ranked = []
+    for doc in documents:
+        if _field(doc, "status") != "PUBLISHED" or not _field(doc, "is_answerable", True):
+            continue
+        content = _field(doc, "content", "")
+        title = _field(doc, "title", "")
+        section_metadata = {
+            "version_id": _field(doc, "version_id"),
+            "section_id": _field(doc, "section_id"),
+            "section_code": _field(doc, "section_code"),
+            "heading": _field(doc, "heading"),
+            "page_start": _field(doc, "page_start"),
+            "page_end": _field(doc, "page_end"),
+        }
+        # Overlap preserves sentences crossing a chunk boundary.
+        for start in range(0, len(content), 1000):
+            chunk = content[start:start + 1200]
+            # Titles boost ranking but cannot make an unrelated passage evidence.
+            overlap = query & tokens(chunk)
+            if not overlap or len(overlap) / len(query) < 0.35:
+                continue
+            score = len(overlap) + len(query & tokens(title))
+            ranked.append((score, Passage(
+                document_id=_field(doc, "document_id"),
+                title=title,
+                content=chunk,
+                source_url=_field(doc, "source_url"),
+                **section_metadata,
+            )))
+    ranked.sort(key=lambda item: item[0], reverse=True)
+    return [passage for _, passage in ranked[:limit]]
