@@ -40,6 +40,13 @@ interface Section {
   is_answerable: boolean;
 }
 
+interface UploadItem {
+  uid: string;
+  file: File;
+  status: 'pending' | 'uploading' | 'done' | 'error';
+  error?: string;
+}
+
 const roleLabels: Record<string, string> = { EMPLOYEE: 'Tất cả nhân viên', MANAGER: 'Quản lý, HR và quản trị viên', HR: 'HR và quản trị viên', ADMIN: 'Chỉ quản trị viên' };
 const statusLabels: Record<string, string> = { DRAFT: 'Bản nháp', PUBLISHED: 'Đã công bố', ARCHIVED: 'Đã lưu trữ' };
 
@@ -93,6 +100,7 @@ export function KnowledgePage() {
   const [versions, setVersions] = useState<Version[]>([]);
   const [versionsLoading, setVersionsLoading] = useState(false);
   const [selectedPdf, setSelectedPdf] = useState<File | null>(null);
+  const [uploadItems, setUploadItems] = useState<UploadItem[]>([]);
   const [editingVersion, setEditingVersion] = useState<Version | null>(null);
   const [editorLoading, setEditorLoading] = useState(false);
   const [form] = Form.useForm();
@@ -108,6 +116,7 @@ export function KnowledgePage() {
   const edit = (document: Document | null) => {
     setEditing(document);
     setSelectedPdf(null);
+    setUploadItems([]);
     form.resetFields();
     form.setFieldsValue(document ?? { status: 'DRAFT', minimum_role: 'EMPLOYEE' });
     setOpen(true);
@@ -120,16 +129,29 @@ export function KnowledgePage() {
       if (editing) {
         await api.put(`/ai/knowledge/${editing.document_id}`, { ...values, source_url: values.source_url?.trim() || null });
       } else {
-        if (!selectedPdf) { message.error('Chọn file PDF trước.'); return; }
-        const body = new FormData();
-        body.append('file', selectedPdf);
-        body.append('minimum_role', values.minimum_role || 'EMPLOYEE');
-        const response = await api.post<{ document: Document; version: Version }>('/ai/knowledge/upload', body);
-        openVersions(response.data.document);
-        setPdfTab('versions');
+        const pending = uploadItems.filter(item => item.status === 'pending' || item.status === 'error');
+        if (!pending.length) return;
+        let completed = 0;
+        for (const item of pending) {
+          setUploadItems(items => items.map(current => current.uid === item.uid ? { ...current, status: 'uploading', error: undefined } : current));
+          const body = new FormData();
+          body.append('file', item.file);
+          body.append('minimum_role', values.minimum_role || 'EMPLOYEE');
+          try {
+            await api.post('/ai/knowledge/upload', body);
+            completed += 1;
+            setUploadItems(items => items.map(current => current.uid === item.uid ? { ...current, status: 'done' } : current));
+          } catch (error: unknown) {
+            const detail = await aiErrorMessage(error, 'Không tải được PDF.');
+            setUploadItems(items => items.map(current => current.uid === item.uid ? { ...current, status: 'error', error: detail } : current));
+          }
+        }
+        if (completed) message.success(`Đã lưu ${completed} tài liệu thành bản nháp. Mở Quản lý PDF để kiểm tra và công bố.`);
+        await load();
+        return;
       }
       setOpen(false);
-      message.success(editing ? 'Đã lưu tài liệu.' : 'Đã tải PDF thành bản nháp. Có thể xem trước và công bố.');
+      message.success('Đã lưu tài liệu.');
       await load();
     } catch (error: unknown) { message.error(await aiErrorMessage(error, 'Không lưu được tài liệu. Kiểm tra PDF và quyền truy cập.')); }
     finally { setSaving(false); }
@@ -160,7 +182,7 @@ export function KnowledgePage() {
     body.append('minimum_role', values.minimum_role || versionDocument.minimum_role);
     setSaving(true);
     try {
-      await api.post(`/ai/knowledge/${versionDocument.document_id}/versions`, body, { headers: { 'Content-Type': 'multipart/form-data' } });
+      await api.post(`/ai/knowledge/${versionDocument.document_id}/versions`, body);
       setSelectedPdf(null);
       setPdfTab('versions');
       message.success('Đã tải phiên bản nháp. Kiểm tra mục/trang rồi mới công bố.');
@@ -232,6 +254,21 @@ export function KnowledgePage() {
     <p className="ant-upload-text">Kéo PDF vào đây hoặc bấm để chọn</p>
     <p className="ant-upload-hint">PDF có văn bản · tối đa 10 MiB, 100 trang</p>
   </Upload.Dragger>;
+  const batchPicker = <Upload.Dragger accept="application/pdf,.pdf" multiple
+    fileList={uploadItems.map(item => ({ uid: item.uid, name: item.file.name,
+      status: item.status === 'pending' ? undefined : item.status === 'uploading' ? 'uploading' : item.status === 'done' ? 'done' : 'error' }))}
+    beforeUpload={file => {
+      if (!file.name.toLowerCase().endsWith('.pdf') || file.size > 10 * 1024 * 1024) {
+        message.error(`${file.name}: chọn PDF không quá 10 MiB.`); return Upload.LIST_IGNORE;
+      }
+      setUploadItems(items => [...items, { uid: file.uid, file, status: 'pending' }]);
+      return false;
+    }} onRemove={file => { setUploadItems(items => items.filter(item => item.uid !== file.uid)); return true; }}
+    disabled={saving}>
+    <p className="ant-upload-drag-icon"><InboxOutlined /></p>
+    <p className="ant-upload-text">Kéo nhiều PDF vào đây hoặc bấm để chọn</p>
+    <p className="ant-upload-hint">Mỗi file là một tài liệu · PDF có văn bản · tối đa 10 MiB, 100 trang/file</p>
+  </Upload.Dragger>;
   const uploadPanel = <Form form={versionForm} layout="vertical" disabled={saving}>
     <Form.Item>{pdfPicker}</Form.Item>
     <Collapse ghost items={[{ key: 'options', label: 'Tùy chọn tài liệu', children: <>
@@ -279,12 +316,13 @@ export function KnowledgePage() {
         ]} />
     </Card>
     <Modal forceRender centered open={open} title={editing ? 'Sửa thông tin tài liệu' : 'Thêm tài liệu'}
-      okButtonProps={{ disabled: !editing && !selectedPdf }} onCancel={() => { if (!saving) setOpen(false); }} onOk={() => void save()} confirmLoading={saving}
-      okText={editing ? "Lưu thay đổi" : "Tải lên và lưu nháp"} cancelText="Hủy" width={720} styles={modalStyles}>
+      okButtonProps={{ disabled: !editing && !uploadItems.some(item => item.status === 'pending' || item.status === 'error') }} onCancel={() => { if (!saving) setOpen(false); }} onOk={() => void save()} confirmLoading={saving}
+      okText={editing ? "Lưu thay đổi" : uploadItems.some(item => item.status === 'error') ? 'Thử lại file lỗi' : 'Tải lên và lưu nháp'} cancelText={editing ? 'Hủy' : 'Đóng'} width={720} styles={modalStyles}>
       <Form form={form} layout="vertical" disabled={saving}>
         {!editing ? <>
-          <Form.Item style={{ marginTop: 16 }}>{pdfPicker}</Form.Item>
-          <Typography.Paragraph type="secondary">Tên tài liệu lấy từ tên file. Sau khi tải, bạn có thể xem trước và công bố bản nháp.</Typography.Paragraph>
+          <Form.Item style={{ marginTop: 16 }}>{batchPicker}</Form.Item>
+          {uploadItems.filter(item => item.status === 'error').map(item => <Alert key={item.uid} type="error" showIcon title={item.file.name} description={item.error} style={{ marginBottom: 8 }} />)}
+          <Typography.Paragraph type="secondary">Tên tài liệu lấy từ tên file. File được tải lần lượt, kết quả hiển thị riêng. Thử lại chỉ tải file lỗi; file đã lưu không tải lại.</Typography.Paragraph>
           <Collapse ghost items={[{ key: 'access', label: 'Giới hạn người được đọc (không bắt buộc)', children:
             <Form.Item name="minimum_role" label="Người được đọc" extra="Mặc định tất cả nhân viên. Chỉ giới hạn với tài liệu dành riêng cho quản lý hoặc HR."><Select options={roleOptions} /></Form.Item>
           }]} />

@@ -50,6 +50,8 @@ Ba tài liệu PDF ví dụ và `manifest.json` được tạo vào `backend/sto
 
 Danh sách leave/fix có `view=mine|approvals|visible`. `approvals` join employee với `manager_employee_id` hiện tại và chỉ lấy trạng thái PENDING; không dựa vào `reviewer_employee_id`. Dịch vụ duyệt khóa hàng employee bằng `FOR UPDATE`, kiểm tra lại quan hệ trực tiếp trước mutation và commit, từ chối tự duyệt, không có ADMIN bypass. HR được duyệt khi là quản lý trực tiếp.
 
+Riêng `LeaveService.review_leave_request` khóa dòng `LeaveRequest` bằng `FOR UPDATE` trước khi kiểm tra `PENDING`, rồi mới khóa employee. `populate_existing=True` làm mới đối tượng ORM đã có trong session. Khóa giữ đến commit/rollback của endpoint; request chờ khóa đọc trạng thái đã xử lý và bị từ chối, tránh duyệt hoặc trừ phép lặp.
+
 ---
 
 ### 1. Giới thiệu tổng quan (Introduction)
@@ -562,5 +564,7 @@ Ngày/bộ lọc phổ biến xử lý tại Python. Date fallback gửi tối �
 Chỉnh báo cáo gửi report_run_id; backend đọc filters đã lưu theo owner, không tin filter cũ do client tự khai. Run phải READY/còn hạn. Filter mới kiểm quyền/kỳ lại rồi tạo run mới; preview/download kiểm quyền hiện tại và scope snapshot. Chỉnh giới hạn trong filter/template sẵn có, không sửa công thức lương.
 
 Upload một bước POST /api/v1/ai/knowledge/upload: HR/Admin, validate PDF trước ghi, tạo document DRAFT + version đầu + section mỗi trang có text. Tải version mới không thay bản published cho tới khi công bố. Quyền mặc định EMPLOYEE, tùy chọn thu hẹp; HR không nâng tới ADMIN. File private/hash, kiểm active content gồm AA/Next. Không thêm migration cho flow này.
+
+KnowledgePage quản lý hàng đợi nhiều file với trạng thái pending/uploading/done/error. Mỗi file gọi endpoint upload hiện có tuần tự, độc lập; lỗi một file không hủy các file đã lưu. Thử lại chỉ xử lý pending/error. API client nhận FormData sẽ tắt header Content-Type thủ công, để browser tạo multipart boundary thay cho mặc định JSON. Không thêm endpoint bulk/transaction chung; upload version vẫn một file. Error envelope chỉ ánh xạ mã lỗi PDF trong whitelist sang thông báo cụ thể, không trả exception hoặc nội dung file.
 
 Nhận dạng số dư dùng chung is_leave_balance_query cho tra cứu và hỏi xen trong draft; alias ngày nghỉ/ngày phép giữ nguyên guard danh tính JWT, không thay thế câu hỏi policy/report. Parser báo cáo xử lý tháng sau/tháng tới tại Python theo today HCM, monthrange giữ đúng giao năm/năm nhuận; adapter không gọi provider nếu kỳ đã xác định. Reply định dạng ngày DD/MM/YYYY và scope tiếng Việt, action vẫn giữ contract ISO/enum.

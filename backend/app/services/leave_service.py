@@ -113,6 +113,9 @@ class LeaveService:
         stmt = (
             select(LeaveRequest)
             .where(LeaveRequest.leave_request_id == leave_request_id)
+            # Serialize reviews before reading status; refresh any cached ORM instance.
+            .with_for_update()
+            .execution_options(populate_existing=True)
             .options(
                 selectinload(LeaveRequest.leave_type)
             )

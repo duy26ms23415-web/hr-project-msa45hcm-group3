@@ -9,6 +9,8 @@ const api = axios.create({
 
 // Request interceptor: attach JWT bearer token
 api.interceptors.request.use((config) => {
+  // Let the browser generate the multipart boundary; JSON defaults corrupt file uploads.
+  if (config.data instanceof FormData) config.headers.setContentType(false);
   const token = localStorage.getItem('access_token');
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;

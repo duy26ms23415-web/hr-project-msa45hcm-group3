@@ -15,6 +15,7 @@ const manifest = { documents: [] };
 await fs.access(edge);
 await fs.mkdir(output, { recursive: true });
 const requests = [];
+const uploads = [];
 const contentTypes = { '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.html': 'text/html' };
 const server = http.createServer(async (req, res) => {
   try {
@@ -23,6 +24,16 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname.startsWith('/api/')) {
       if (req.headers.authorization !== 'Bearer local-browser-fixture') return json(401, { message: 'Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại để tiếp tục.' });
       requests.push(req.url);
+      if (url.pathname === '/api/v1/ai/knowledge/upload' && req.method === 'POST') {
+        const chunks = [];
+        for await (const chunk of req) chunks.push(chunk);
+        const body = Buffer.concat(chunks).toString();
+        if (!/^multipart\/form-data; boundary=/.test(req.headers['content-type'] || '')) throw new Error('Missing multipart boundary');
+        const filename = body.match(/filename="([^"]+)"/)?.[1];
+        uploads.push(filename);
+        if (filename === 'retry.pdf' && uploads.filter(name => name === filename).length === 1) return json(422, { code: 'PDF_TEXT_REQUIRED', message: 'PDF chưa có văn bản đọc được.' });
+        return json(201, {});
+      }
       if (url.pathname === '/api/v1/auth/me') return json(200, { user_account_id: 9, employee_id: 7, login_email: 'manager@example.test', is_active: true, roles: ['HR'] });
       if (url.pathname === '/api/v1/ai/knowledge') return json(200, []);
       if (url.pathname === '/api/v1/ai/chat') return json(200, {
@@ -100,6 +111,31 @@ try {
       const screenshot = await send('Page.captureScreenshot', { format:'png' });
       await fs.writeFile(path.join(output, name+'.png'), Buffer.from(screenshot.data,'base64'));
       console.log('PASS '+name+': simple drag/upload dialog within viewport');
+      if (name === 'desktop') {
+        await send('Runtime.evaluate', { expression: `(() => {
+          const input = document.querySelector('.ant-modal input[type=file]');
+          if (!input.multiple) throw new Error('Picker must accept multiple files');
+          const transfer = new DataTransfer();
+          for (const name of ['policy.pdf', 'retry.pdf']) transfer.items.add(new File(['%PDF-fixture'], name, {type:'application/pdf'}));
+          input.files = transfer.files;
+          input.dispatchEvent(new Event('change', {bubbles:true}));
+        })()` });
+        await pause(350);
+        await send('Runtime.evaluate', { expression: "document.querySelector('.ant-modal-footer .ant-btn-primary').click()" });
+        for (let attempt = 0; attempt < 100; attempt++) {
+          const ready = await send('Runtime.evaluate', { expression: "document.body.innerText.includes('Thử lại file lỗi')", returnByValue:true });
+          if (ready.result.value) break;
+          await pause(50);
+        }
+        if (uploads.join(',') !== 'policy.pdf,retry.pdf') throw new Error('Batch did not submit both files: ' + uploads);
+        await send('Runtime.evaluate', { expression: "document.querySelector('.ant-modal-footer .ant-btn-primary').click()" });
+        for (let attempt = 0; attempt < 100; attempt++) {
+          if (uploads.length === 3) break;
+          await pause(50);
+        }
+        if (uploads.join(',') !== 'policy.pdf,retry.pdf,retry.pdf') throw new Error('Retry duplicated successful files: ' + uploads);
+        console.log('PASS batch: multipart upload of two PDFs; partial failure retries only failed file.');
+      }
       socket.send(JSON.stringify({ id: ++sequence, method: 'Browser.close' }));
       await pause(100);
     } finally {

@@ -10,6 +10,14 @@ from fastapi.exception_handlers import http_exception_handler, request_validatio
 from app.services.ai_request_security import request_context
 
 MESSAGES = {
+    "PDF_SIZE_INVALID": "PDF phải có dung lượng từ 1 byte đến 10 MiB.",
+    "PDF_MIME_INVALID": "Nội dung file không phải PDF. Đổi đuôi file sang .pdf không chuyển đổi định dạng.",
+    "PDF_INVALID": "Không đọc được PDF. Hãy xuất lại file PDF và thử lại.",
+    "PDF_ENCRYPTED": "PDF có mật khẩu hoặc mã hóa. Hãy tải bản không có mật khẩu.",
+    "PDF_ACTIVE_CONTENT": "PDF chứa nội dung tương tác không được phép. Hãy xuất bản PDF tĩnh rồi tải lại.",
+    "PDF_PAGE_LIMIT": "PDF phải có từ 1 đến 100 trang. Hãy chia tài liệu thành các file nhỏ hơn.",
+    "PDF_TEXT_REQUIRED": "PDF chưa có văn bản đọc được (có thể là bản scan). Hãy dùng OCR hoặc xuất PDF có văn bản trước khi tải.",
+    "PDF_TEXT_LIMIT": "Văn bản PDF vượt giới hạn xử lý. Hãy chia tài liệu thành các file nhỏ hơn.",
     "PAYROLL_CURRENCY_UNAVAILABLE": "Thông tin tiền tệ của kỳ lương chưa được xác minh. Vui lòng liên hệ HR; báo cáo chưa được tạo.",
     "AI_UNAVAILABLE": "Hiện không thể kết nối dịch vụ AI để xử lý yêu cầu này. Bạn có thể chọn một gợi ý có sẵn hoặc thử lại sau.",
     "PERMISSION_DENIED": "Bạn không có quyền thực hiện yêu cầu này hoặc truy cập dữ liệu được yêu cầu. Vui lòng chọn chức năng trong phạm vi quyền của bạn.",
@@ -60,6 +68,8 @@ def install_ai_errors(app, prefixes):
         elif status == 404:
             code = "REPORT_UNAVAILABLE" if "/reports" in request.url.path else "DOCUMENT_UNAVAILABLE" if "/knowledge" in request.url.path else "PERMISSION_DENIED"
         elif raw == "PAYROLL_CURRENCY_UNAVAILABLE":
+            code = raw
+        elif status == 422 and raw in MESSAGES and raw.startswith("PDF_"):
             code = raw
         elif status == 410:
             code = "DRAFT_EXPIRED" if raw and "DRAFT" in raw else "REPORT_EXPIRED"
