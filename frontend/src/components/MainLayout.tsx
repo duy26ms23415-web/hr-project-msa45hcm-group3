@@ -58,7 +58,7 @@ export const MainLayout: React.FC = () => {
       icon: <QrcodeOutlined />,
       label: 'Màn hình Kiosk',
     },
-    ...(hasRole(['ADMIN', 'HR']) ? [{ key: '/knowledge', icon: <RobotOutlined />, label: 'Kiến thức AI' }] : []),
+    ...(hasRole(['ADMIN', 'HR']) ? [{ key: '/knowledge', icon: <RobotOutlined />, label: 'Tài liệu & chính sách' }] : []),
     ...(hasRole(['ADMIN', 'HR', 'MANAGER'])
       ? [
           {
