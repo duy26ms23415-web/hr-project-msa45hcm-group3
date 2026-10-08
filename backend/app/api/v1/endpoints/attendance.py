@@ -200,14 +200,24 @@ async def list_attendance_records(
     """Get daily attendance records (filtered by date range and employee)"""
     user_roles = [ra.role.role_code for ra in current_user.role_assignments]
     
-    # If regular employee, only allowed to see their own records
-    target_emp_id = employee_id
-    if "ADMIN" not in user_roles and "HR" not in user_roles and "MANAGER" not in user_roles:
-        target_emp_id = current_user.employee_id
-    elif not target_emp_id:
-        target_emp_id = current_user.employee_id
+    stmt = select(AttendanceDay)
+    if "ADMIN" in user_roles or "HR" in user_roles:
+        if employee_id is not None:
+            stmt = stmt.where(AttendanceDay.employee_id == employee_id)
+    elif "MANAGER" in user_roles:
+        direct_reports = select(Employee.employee_id).where(
+            Employee.manager_employee_id == current_user.employee_id
+        )
+        stmt = stmt.where(
+            (AttendanceDay.employee_id == current_user.employee_id)
+            | AttendanceDay.employee_id.in_(direct_reports)
+        )
+        if employee_id is not None:
+            stmt = stmt.where(AttendanceDay.employee_id == employee_id)
+    else:
+        # Employee-supplied filters cannot expose another person's records.
+        stmt = stmt.where(AttendanceDay.employee_id == current_user.employee_id)
 
-    stmt = select(AttendanceDay).where(AttendanceDay.employee_id == target_emp_id)
     if from_date:
         stmt = stmt.where(AttendanceDay.work_date >= from_date)
     if to_date:
