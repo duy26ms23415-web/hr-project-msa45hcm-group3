@@ -7,6 +7,10 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class GoogleLoginRequest(BaseModel):
+    id_token: str
+
+
 class Token(BaseModel):
     access_token: str
     refresh_token: str
