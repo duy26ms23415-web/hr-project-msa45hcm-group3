@@ -24,7 +24,7 @@ api.interceptors.response.use(
     if (error.response?.status === 401 && !window.location.pathname.includes('/login') && !isKioskRequest) {
       localStorage.removeItem('access_token');
       localStorage.removeItem('refresh_token');
-      window.location.href = '/login';
+      window.location.href = '/login?reason=session-expired';
     }
     return Promise.reject(error);
   }

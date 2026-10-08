@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import { Card, Form, Input, Button, Alert, Typography, Divider, Space, Tag } from 'antd';
 import { UserOutlined, LockOutlined, ThunderboltOutlined, SafetyCertificateOutlined } from '@ant-design/icons';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { SESSION_EXPIRED_MESSAGE } from '../types/ai';
 import { useAuth } from '../context/AuthContext';
 
 const { Title, Text, Paragraph } = Typography;
@@ -10,8 +11,9 @@ export const LoginPage: React.FC = () => {
   const [form] = Form.useForm();
   const { login } = useAuth();
   const navigate = useNavigate();
+  const [query] = useSearchParams();
   const [loading, setLoading] = useState(false);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [errorMsg, setErrorMsg] = useState<string | null>(() => query.get('reason') === 'session-expired' ? SESSION_EXPIRED_MESSAGE : null);
 
   const handleSubmit = async (values: { email: string; pass: string }) => {
     setLoading(true);
