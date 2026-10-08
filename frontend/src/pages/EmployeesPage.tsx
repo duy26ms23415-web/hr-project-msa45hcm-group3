@@ -65,13 +65,14 @@ export const EmployeesPage: React.FC = () => {
   const fetchMetadata = async () => {
     try {
       const [deptRes, posRes] = await Promise.all([
-        api.get('/departments/departments').catch(() => ({ data: [] })),
-        api.get('/departments/positions').catch(() => ({ data: [] })),
+        api.get('/departments'),
+        api.get('/positions'),
       ]);
       setDepartments(deptRes.data);
       setPositions(posRes.data);
     } catch (e) {
       console.error(e);
+      message.error('Không tải được danh sách phòng ban và chức danh. Vui lòng tải lại trang.');
     }
   };
 
