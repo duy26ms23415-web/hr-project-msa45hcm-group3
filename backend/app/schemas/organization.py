@@ -75,9 +75,9 @@ class EmployeeCreate(EmployeeBase):
 
 
 class EmployeeUpdate(BaseModel):
-    full_name: Optional[str] = None
+    full_name: Optional[str] = Field(default=None, min_length=1, max_length=200)
     email: Optional[EmailStr] = None
-    phone_number: Optional[str] = None
+    phone_number: Optional[str] = Field(default=None, max_length=20)
     date_of_birth: Optional[date] = None
     department_id: Optional[int] = None
     position_id: Optional[int] = None
@@ -85,6 +85,29 @@ class EmployeeUpdate(BaseModel):
     employment_status: Optional[str] = None
     hire_date: Optional[date] = None
     termination_date: Optional[date] = None
+
+    new_password: Optional[str] = Field(default=None, min_length=8, max_length=72, repr=False)
+
+    @field_validator("new_password")
+    @classmethod
+    def validate_password_bytes(cls, value: Optional[str]) -> Optional[str]:
+        if value is not None and len(value.encode("utf-8")) > 72:
+            raise ValueError("Mật khẩu không được vượt quá 72 byte UTF-8")
+        return value
+
+    @field_validator("full_name", "email", "department_id", "position_id", "employment_status", "hire_date")
+    @classmethod
+    def reject_null_required_fields(cls, value):
+        if value is None:
+            raise ValueError("Trường này không được để trống")
+        return value
+
+    @field_validator("employment_status")
+    @classmethod
+    def validate_employment_status(cls, value):
+        if value not in {"ACTIVE", "INACTIVE", "TERMINATED"}:
+            raise ValueError("Trạng thái làm việc không hợp lệ")
+        return value
 
 
 class EmployeeResponse(EmployeeBase):

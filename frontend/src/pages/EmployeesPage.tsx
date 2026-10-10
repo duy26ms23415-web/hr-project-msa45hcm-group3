@@ -16,7 +16,8 @@ import {
 } from 'antd';
 import {
   UserAddOutlined,
-  LockOutlined,
+  EditOutlined,
+  DeleteOutlined,
   QrcodeOutlined,
   TeamOutlined,
   MailOutlined,
@@ -47,32 +48,67 @@ export const EmployeesPage: React.FC = () => {
   const [form] = Form.useForm();
   const [submitting, setSubmitting] = useState(false);
 
-  const [passwordEmployee, setPasswordEmployee] = useState<Employee | null>(null);
-  const [passwordForm] = Form.useForm();
-  const [savingPassword, setSavingPassword] = useState(false);
+  const [editingEmployee, setEditingEmployee] = useState<Employee | null>(null);
+  const [editForm] = Form.useForm();
+  const [savingEmployee, setSavingEmployee] = useState(false);
+  const editingDemo = !!editingEmployee && DEMO_EMAILS.has(editingEmployee.email.toLowerCase());
 
-  const closePasswordModal = () => {
-    if (savingPassword) return;
-    setPasswordEmployee(null);
-    passwordForm.resetFields();
+  const closeEditModal = () => {
+    if (savingEmployee) return;
+    setEditingEmployee(null);
+    editForm.resetFields();
   };
 
-  const handleResetPassword = async (values: { new_password: string }) => {
-    if (!isAdmin || !passwordEmployee || savingPassword) return;
-    setSavingPassword(true);
+  const handleUpdateEmployee = async (values: any) => {
+    if (!isAdmin || !editingEmployee || savingEmployee) return;
+    setSavingEmployee(true);
     try {
-      await api.post(`/employees/${passwordEmployee.employee_id}/password`, {
-        new_password: values.new_password,
-      });
-      message.success('Đã cập nhật mật khẩu đăng nhập của nhân viên.');
-      setPasswordEmployee(null);
-      passwordForm.resetFields();
+      const payload = {
+        full_name: values.full_name,
+        phone_number: values.phone_number || null,
+        department_id: values.department_id,
+        position_id: values.position_id,
+        manager_employee_id: values.manager_employee_id ?? null,
+        hire_date: values.hire_date.format('YYYY-MM-DD'),
+        ...(editingDemo ? {} : {
+          email: values.email,
+          employment_status: values.employment_status,
+          ...(values.new_password ? { new_password: values.new_password } : {}),
+        }),
+      };
+      await api.patch(`/employees/${editingEmployee.employee_id}`, payload);
+      message.success('Đã cập nhật thông tin nhân viên và tài khoản đăng nhập.');
+      setEditingEmployee(null);
+      editForm.resetFields();
+      fetchEmployees();
     } catch (err: any) {
       const detail = err.response?.data?.detail;
-      message.error(typeof detail === 'string' ? detail : 'Không đổi được mật khẩu. Vui lòng thử lại.');
+      message.error(typeof detail === 'string' ? detail : 'Không cập nhật được nhân viên. Vui lòng kiểm tra thông tin.');
     } finally {
-      setSavingPassword(false);
+      setSavingEmployee(false);
     }
+  };
+
+  const confirmDeleteAccount = (employee: Employee) => {
+    if (!isAdmin || DEMO_EMAILS.has(employee.email.toLowerCase())) return;
+    Modal.confirm({
+      title: 'Xóa tài khoản đăng nhập?',
+      content: `Nhân viên: ${employee.full_name} (${employee.email}). Tài khoản sẽ bị xóa và không thể đăng nhập. Hồ sơ nhân viên và lịch sử chấm công được giữ lại.`,
+      okText: 'Xóa tài khoản',
+      okButtonProps: { danger: true },
+      cancelText: 'Hủy',
+      onOk: async () => {
+        try {
+          await api.delete(`/employees/${employee.employee_id}/account`);
+          message.success('Đã xóa tài khoản đăng nhập. Hồ sơ nhân viên được giữ lại.');
+          fetchEmployees();
+        } catch (err: any) {
+          const detail = err.response?.data?.detail;
+          message.error(typeof detail === 'string' ? detail : 'Không xóa được tài khoản. Vui lòng thử lại.');
+          throw err;
+        }
+      },
+    });
   };
 
   // QR Modal
@@ -213,17 +249,28 @@ export const EmployeesPage: React.FC = () => {
           locale={{ emptyText: isAdminOrHR ? 'Chưa có nhân viên' : 'Chưa có nhân viên được phân công cho bạn' }}
           columns={[
             ...(isAdmin ? [{
-              title: 'Tài khoản',
-              key: 'password',
-              render: (_: unknown, record: Employee) => DEMO_EMAILS.has(record.email.toLowerCase()) ? (
-                <Text type="secondary">Tài khoản demo</Text>
-              ) : (
-                <Button size="small" icon={<LockOutlined />} onClick={() => {
-                  passwordForm.resetFields();
-                  setPasswordEmployee(record);
+              title: 'Thao tác',
+              key: 'edit_employee',
+              render: (_: unknown, record: Employee) => (
+                <Space wrap>
+                <Button size="small" icon={<EditOutlined />} onClick={() => {
+                  editForm.resetFields();
+                  editForm.setFieldsValue({
+                    ...record,
+                    hire_date: dayjs(record.hire_date),
+                    new_password: undefined,
+                    confirm_password: undefined,
+                  });
+                  setEditingEmployee(record);
                 }}>
-                  Đổi/đặt lại mật khẩu
+                  Cập nhật nhân viên
                 </Button>
+                {!DEMO_EMAILS.has(record.email.toLowerCase()) && (
+                  <Button size="small" danger icon={<DeleteOutlined />} onClick={() => confirmDeleteAccount(record)}>
+                    Xóa tài khoản
+                  </Button>
+                )}
+                </Space>
               ),
             }] : []),
             {
@@ -267,7 +314,7 @@ export const EmployeesPage: React.FC = () => {
               key: 'employment_status',
               render: (s) => (
                 <Tag color={s === 'ACTIVE' ? 'success' : 'default'}>
-                  {s === 'ACTIVE' ? 'Đang làm việc' : s}
+                  {s === 'ACTIVE' ? 'Đang làm việc' : s === 'TERMINATED' ? 'Đã nghỉ việc' : s === 'INACTIVE' ? 'Tạm ngưng' : s}
                 </Tag>
               ),
             },
@@ -291,53 +338,64 @@ export const EmployeesPage: React.FC = () => {
 
       {isAdmin && (
         <Modal
-          open={passwordEmployee !== null}
-          title="Đổi/đặt lại mật khẩu"
-          onCancel={closePasswordModal}
+          open={editingEmployee !== null}
+          title="Cập nhật nhân viên"
+          onCancel={closeEditModal}
           footer={null}
-          closable={!savingPassword}
-          maskClosable={!savingPassword}
-          keyboard={!savingPassword}
-          width={480}
+          closable={!savingEmployee}
+          maskClosable={!savingEmployee}
+          keyboard={!savingEmployee}
+          width={600}
         >
-          <p>Nhân viên: <b>{passwordEmployee?.full_name}</b> ({passwordEmployee?.email})</p>
-          <Form form={passwordForm} layout="vertical" onFinish={handleResetPassword}>
-            <Form.Item
-              name="new_password"
-              label="Mật khẩu mới"
-              extra="Nhân viên dùng mật khẩu này cho lần đăng nhập tiếp theo."
-              rules={[
-                { required: true, message: 'Vui lòng nhập mật khẩu mới!' },
+          <p>Mã nhân viên: <b>{editingEmployee?.employee_code}</b></p>
+          {editingDemo && <p>Tài khoản demo: giữ nguyên email, mật khẩu và trạng thái đăng nhập.</p>}
+          <Form form={editForm} layout="vertical" onFinish={handleUpdateEmployee} disabled={savingEmployee}>
+            <Form.Item name="full_name" label="Họ và tên" rules={[{ required: true, whitespace: true, max: 200, message: 'Vui lòng nhập họ tên, tối đa 200 ký tự.' }]}>
+              <Input />
+            </Form.Item>
+            <Form.Item name="email" label="Email công ty / Email đăng nhập" extra="Cập nhật email này đồng thời cập nhật email đăng nhập của tài khoản hiện có." rules={[{ required: true, type: 'email', message: 'Vui lòng nhập email hợp lệ.' }]}>
+              <Input disabled={editingDemo || savingEmployee} />
+            </Form.Item>
+            <Form.Item name="phone_number" label="Số điện thoại" rules={[{ max: 20, message: 'Tối đa 20 ký tự.' }]}>
+              <Input />
+            </Form.Item>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+              <Form.Item name="department_id" label="Phòng ban" rules={[{ required: true, message: 'Chọn phòng ban.' }]}>
+                <Select options={departments.map(d => ({ value: d.department_id, label: d.department_name }))} />
+              </Form.Item>
+              <Form.Item name="position_id" label="Chức danh" rules={[{ required: true, message: 'Chọn chức danh.' }]}>
+                <Select options={positions.map(p => ({ value: p.position_id, label: p.position_name }))} />
+              </Form.Item>
+            </div>
+            <Form.Item name="manager_employee_id" label="Quản lý trực tiếp">
+              <Select allowClear options={employees.filter(e => e.employee_id !== editingEmployee?.employee_id).map(e => ({ value: e.employee_id, label: `${e.full_name} (${e.employee_code})` }))} />
+            </Form.Item>
+            <Form.Item name="hire_date" label="Ngày bắt đầu làm việc" rules={[{ required: true, message: 'Chọn ngày bắt đầu.' }]}>
+              <DatePicker style={{ width: '100%' }} format="YYYY-MM-DD" />
+            </Form.Item>
+            <Form.Item name="employment_status" label="Trạng thái làm việc" extra="Tạm ngưng hoặc đã nghỉ việc sẽ khóa đăng nhập; đang làm việc sẽ mở lại tài khoản hiện có." rules={[{ required: true }]}>
+              <Select disabled={editingDemo || savingEmployee} options={[
+                { value: 'ACTIVE', label: 'Đang làm việc' },
+                { value: 'INACTIVE', label: 'Tạm ngưng' },
+                { value: 'TERMINATED', label: 'Đã nghỉ việc' },
+              ]} />
+            </Form.Item>
+            {!editingDemo && <>
+              <Form.Item name="new_password" label="Mật khẩu mới (tùy chọn)" extra="Để trống để giữ nguyên mật khẩu hiện tại." rules={[
                 { min: 8, message: 'Mật khẩu cần ít nhất 8 ký tự.' },
-                {
-                  validator: (_, value) =>
-                    !value || new TextEncoder().encode(value).length <= 72
-                      ? Promise.resolve()
-                      : Promise.reject(new Error('Mật khẩu không được vượt quá 72 byte UTF-8.')),
-                },
-              ]}
-            >
-              <Input.Password autoComplete="new-password" disabled={savingPassword} />
-            </Form.Item>
-            <Form.Item
-              name="confirm_password"
-              label="Nhập lại mật khẩu mới"
-              dependencies={['new_password']}
-              rules={[
-                { required: true, message: 'Vui lòng nhập lại mật khẩu!' },
-                ({ getFieldValue }) => ({
-                  validator: (_, value) =>
-                    !value || value === getFieldValue('new_password')
-                      ? Promise.resolve()
-                      : Promise.reject(new Error('Mật khẩu nhập lại không khớp.')),
-                }),
-              ]}
-            >
-              <Input.Password autoComplete="new-password" disabled={savingPassword} />
-            </Form.Item>
+                { validator: (_, value) => !value || new TextEncoder().encode(value).length <= 72 ? Promise.resolve() : Promise.reject(new Error('Mật khẩu không được vượt quá 72 byte UTF-8.')) },
+              ]}>
+                <Input.Password autoComplete="new-password" />
+              </Form.Item>
+              <Form.Item name="confirm_password" label="Nhập lại mật khẩu mới" dependencies={['new_password']} rules={[
+                ({ getFieldValue }) => ({ validator: (_, value) => value === getFieldValue('new_password') || (!value && !getFieldValue('new_password')) ? Promise.resolve() : Promise.reject(new Error('Mật khẩu nhập lại không khớp.')) }),
+              ]}>
+                <Input.Password autoComplete="new-password" />
+              </Form.Item>
+            </>}
             <Space>
-              <Button onClick={closePasswordModal} disabled={savingPassword}>Hủy</Button>
-              <Button type="primary" htmlType="submit" loading={savingPassword}>Lưu mật khẩu mới</Button>
+              <Button onClick={closeEditModal} disabled={savingEmployee}>Hủy</Button>
+              <Button type="primary" htmlType="submit" loading={savingEmployee}>Lưu thay đổi</Button>
             </Space>
           </Form>
         </Modal>
