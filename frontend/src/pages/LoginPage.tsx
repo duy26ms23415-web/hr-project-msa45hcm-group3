@@ -3,12 +3,13 @@ import { Card, Form, Input, Button, Alert, Typography, Divider, Space, Tag } fro
 import { UserOutlined, LockOutlined, ThunderboltOutlined, SafetyCertificateOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { GoogleLogin } from '@react-oauth/google';
 
 const { Title, Text, Paragraph } = Typography;
 
 export const LoginPage: React.FC = () => {
   const [form] = Form.useForm();
-  const { login } = useAuth();
+  const { login, loginWithGoogle } = useAuth();
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -35,6 +36,21 @@ export const LoginPage: React.FC = () => {
       navigate('/dashboard');
     } catch (err: any) {
       setErrorMsg(err.response?.data?.detail || 'Lỗi đăng nhập nhanh!');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleGoogleSuccess = async (credentialResponse: any) => {
+    setLoading(true);
+    setErrorMsg(null);
+    try {
+      if (credentialResponse.credential) {
+         await loginWithGoogle(credentialResponse.credential);
+         navigate('/dashboard');
+      }
+    } catch (err: any) {
+      setErrorMsg(err.response?.data?.detail || 'Tài khoản Google không tồn tại trong hệ thống!');
     } finally {
       setLoading(false);
     }
@@ -154,6 +170,18 @@ export const LoginPage: React.FC = () => {
         </Form>
 
         <Divider style={{ margin: '24px 0 16px', fontSize: 12, color: '#94a3b8' }}>
+          ĐĂNG NHẬP BẰNG
+        </Divider>
+
+        <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 16 }}>
+          <GoogleLogin
+            onSuccess={handleGoogleSuccess}
+            onError={() => setErrorMsg('Cửa sổ đăng nhập Google bị lỗi!')}
+            width="396"
+          />
+        </div>
+
+        <Divider style={{ margin: '16px 0 16px', fontSize: 12, color: '#94a3b8' }}>
           HOẶC ĐĂNG NHẬP NHANH (DEMO)
         </Divider>
 
