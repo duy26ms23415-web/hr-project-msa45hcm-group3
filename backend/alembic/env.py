@@ -8,9 +8,12 @@ from pathlib import Path
 # Add backend directory to sys.path
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from app.core.config import settings
+from app.core.config import Settings
 from app.core.database import Base
 import app.models  # Ensure all models are loaded
+
+# Match backend startup configuration even when Alembic is run from repo root.
+settings = Settings(_env_file=Path(__file__).resolve().parents[1] / ".env")
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

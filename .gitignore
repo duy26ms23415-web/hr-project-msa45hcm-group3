@@ -55,10 +55,12 @@ Thumbs.db
 
 # Database / Storage
 postgres_data/
+backend/storage/private/
 *.sqlite3
 *.db
 
 # Testing & Coverage
 .pytest_cache/
+.pytest-ai-validation-*/
 .coverage
 htmlcov/

@@ -9,6 +9,8 @@ const api = axios.create({
 
 // Request interceptor: attach JWT bearer token
 api.interceptors.request.use((config) => {
+  // Let the browser generate the multipart boundary; JSON defaults corrupt file uploads.
+  if (config.data instanceof FormData) config.headers.setContentType(false);
   const token = localStorage.getItem('access_token');
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
@@ -24,7 +26,7 @@ api.interceptors.response.use(
     if (error.response?.status === 401 && !window.location.pathname.includes('/login') && !isKioskRequest) {
       localStorage.removeItem('access_token');
       localStorage.removeItem('refresh_token');
-      window.location.href = '/login';
+      window.location.href = '/login?reason=session-expired';
     }
     return Promise.reject(error);
   }

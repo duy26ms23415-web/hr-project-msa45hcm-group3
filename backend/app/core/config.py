@@ -1,4 +1,5 @@
 from typing import List
+from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field
 
@@ -38,9 +39,15 @@ class Settings(BaseSettings):
     # Kiosk Web authorization token
     KIOSK_API_SECRET_KEY: str = "kiosk_secret_device_authorization_token_hr_group3"
 
-    # AI Gemini
+    # Gemini is opt-in; configuring a key alone never enables paid/quota calls.
+    GEMINI_ENABLED: bool = False
     GEMINI_API_KEY: str = ""
-    GEMINI_MODEL_NAME: str = "gemini-1.5-flash"
+    GEMINI_MODEL_NAME: str = "gemini-3.6-flash"
+    GEMINI_INTENT_TIMEOUT_SECONDS: float = Field(default=15, ge=5, le=30)
+    GEMINI_POLICY_TIMEOUT_SECONDS: float = Field(default=15, ge=5, le=30)
+    AI_KNOWLEDGE_STORAGE_DIR: Path = Path(__file__).resolve().parents[2] / "storage" / "private" / "ai-knowledge"
+    AI_KNOWLEDGE_MAX_UPLOAD_BYTES: int = 10 * 1024 * 1024
+    REPORT_STORAGE_DIR: Path = Path(__file__).resolve().parents[2] / "storage" / "private" / "reports"
 
     # CORS
     CORS_ORIGINS: List[str] = ["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:3000"]

@@ -229,6 +229,7 @@ class PayrollService:
                 payroll_period_id=period.payroll_period_id,
                 employee_id=emp.employee_id,
                 base_salary=base_salary,
+                currency_code=active_comp.currency_code,
                 standard_work_days=standard_days_dec,
                 actual_work_days=actual_paid_days,
                 allowance_amount=allowance,
@@ -263,6 +264,8 @@ class PayrollService:
         period = (await db.execute(stmt)).scalar_one_or_none()
         if not period:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Payroll period not found")
+        if period.status not in {"APPROVED", "CLOSED"}:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Payroll report unavailable")
 
         wb = openpyxl.Workbook()
         ws = wb.active

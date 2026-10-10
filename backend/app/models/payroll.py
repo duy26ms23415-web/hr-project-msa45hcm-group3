@@ -1,7 +1,7 @@
 from datetime import date, datetime
 from typing import Optional, Any, Dict
 from decimal import Decimal
-from sqlalchemy import BigInteger, String, Integer, Date, DateTime, Numeric, JSON, ForeignKey, UniqueConstraint
+from sqlalchemy import BigInteger, String, Integer, Date, DateTime, Numeric, JSON, ForeignKey, UniqueConstraint, CheckConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 from app.core.database import Base
@@ -56,6 +56,7 @@ class PayrollLine(Base):
     payroll_period_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("hr_payroll_periods.payroll_period_id"), nullable=False, index=True)
     employee_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("hr_employees.employee_id"), nullable=False, index=True)
     base_salary: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)  # GROSS
+    currency_code: Mapped[Optional[str]] = mapped_column(String(3), nullable=True)
     standard_work_days: Mapped[Decimal] = mapped_column(Numeric(4, 1), nullable=False)
     actual_work_days: Mapped[Decimal] = mapped_column(Numeric(4, 1), nullable=False)
     allowance_amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), default=Decimal("0.00"), nullable=False)
@@ -72,6 +73,7 @@ class PayrollLine(Base):
 
     __table_args__ = (
         UniqueConstraint("payroll_period_id", "employee_id", name="uq_hr_pay_lines_period_employee"),
+        CheckConstraint("currency_code IS NULL OR currency_code ~ '^[A-Z]{3}$'", name="ck_payroll_line_currency"),
     )
 
     # Relationships

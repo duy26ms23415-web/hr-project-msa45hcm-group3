@@ -31,6 +31,7 @@ import dayjs from 'dayjs';
 import { useAuth } from '../context/AuthContext';
 import api from '../api/client';
 import type { LeaveBalance, LeaveRequest } from '../types';
+import { useLocation, useNavigate } from 'react-router-dom';
 
 const { Title, Text } = Typography;
 
@@ -47,6 +48,24 @@ export const LeavePage: React.FC = () => {
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [form] = Form.useForm();
   const [submitting, setSubmitting] = useState(false);
+  const location = useLocation();
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    const draft = location.state?.aiDraft;
+    if (!draft) return;
+    form.resetFields();
+    form.setFieldsValue({ ...draft, leave_date: dayjs(draft.leave_date) });
+    setCreateModalOpen(true);
+    navigate(location.pathname, { replace: true, state: null });
+  }, [location.state, location.pathname, form, navigate]);
+
+  useEffect(() => {
+    if (location.state?.aiTab === 'approvals') {
+      setActiveTab('approvals');
+      navigate(location.pathname, { replace: true, state: null });
+    }
+  }, [location.state, location.pathname, navigate]);
 
   // Review modal
   const [reviewingReq, setReviewingReq] = useState<LeaveRequest | null>(null);
@@ -57,8 +76,8 @@ export const LeavePage: React.FC = () => {
   const fetchBalanceAndTypes = async () => {
     try {
       const [balRes, typesRes] = await Promise.all([
-        api.get('/leaves/balances/me').catch(() => null),
-        api.get('/leaves/types').catch(() => ({ data: [] })),
+        api.get('/leave/balances/me').catch(() => null),
+        api.get('/leave/types').catch(() => ({ data: [] })),
       ]);
       if (balRes) setBalance(balRes.data);
       setLeaveTypes(typesRes.data);
@@ -70,7 +89,7 @@ export const LeavePage: React.FC = () => {
   const fetchMyRequests = async () => {
     try {
       setLoading(true);
-      const res = await api.get('/leaves/requests');
+      const res = await api.get('/leave/requests?view=mine');
       setMyRequests(res.data);
     } catch (e) {
       console.error(e);
@@ -80,10 +99,10 @@ export const LeavePage: React.FC = () => {
   };
 
   const fetchPendingRequests = async () => {
-    if (!hasRole(['MANAGER', 'ADMIN'])) return;
+    if (!hasRole(['MANAGER', 'HR', 'ADMIN'])) return;
     try {
       setLoading(true);
-      const res = await api.get('/leaves/requests?status=PENDING');
+      const res = await api.get('/leave/requests?view=approvals');
       setPendingRequests(res.data);
     } catch (e) {
       console.error(e);
@@ -106,7 +125,7 @@ export const LeavePage: React.FC = () => {
     try {
       const leaveDateStr = values.leave_date.format('YYYY-MM-DD');
 
-      await api.post('/leaves/requests', {
+      await api.post('/leave/requests', {
         leave_type_id: values.leave_type_id,
         leave_date: leaveDateStr,
         session: values.session,
@@ -128,7 +147,7 @@ export const LeavePage: React.FC = () => {
   const handleReviewSubmit = async () => {
     if (!reviewingReq) return;
     try {
-      await api.post(`/leaves/requests/${reviewingReq.leave_request_id}/review`, {
+      await api.post(`/leave/requests/${reviewingReq.leave_request_id}/${reviewAction === 'APPROVED' ? 'approve' : 'reject'}`, {
         status: reviewAction,
         review_note: reviewNote,
       });
@@ -286,7 +305,7 @@ export const LeavePage: React.FC = () => {
                 />
               ),
             },
-            ...(hasRole(['MANAGER', 'ADMIN'])
+            ...(hasRole(['MANAGER', 'HR', 'ADMIN'])
               ? [
                   {
                     key: 'approvals',
@@ -389,6 +408,7 @@ export const LeavePage: React.FC = () => {
         open={createModalOpen}
         onCancel={() => setCreateModalOpen(false)}
         title="Lập đơn xin nghỉ phép"
+        forceRender
         footer={null}
         width={520}
       >

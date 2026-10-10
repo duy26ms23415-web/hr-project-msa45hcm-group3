@@ -1,10 +1,36 @@
 # HR Management with AI Project
 
+Khi nháp đang hỏi lý do, câu trả lời chỉ điền lý do và giữ nguyên ngày, buổi, lượt công và giờ đã chọn. Với câu nhập gộp, phần sau “lý do/vì” không dùng để suy ra các trường khác. Upload PDF từ chối XFA và action bị cấm trong form, bookmark hoặc cấu trúc lồng nhau; bookmark nội bộ an toàn vẫn được chấp nhận.
+
+Gemini mặc định tắt (`GEMINI_ENABLED=false`), kể cả khi đã cấu hình API key. Fallback, tra cứu tài liệu và báo cáo hoạt động không cần Gemini. Khi chủ động bật, classifier gửi tối đa 600 ký tự đã che dữ liệu cá nhân, nguồn policy tối đa 4.000 ký tự; đầu ra giới hạn 128 token cho phân loại, 256 token cho filter báo cáo hoặc 384 token cho trích nguồn. Không tự retry; lỗi provider dùng fallback hoặc mẫu lỗi hiện hữu.
+
+
 Tài liệu thiết kế và định hướng kiến trúc hệ thống quản lý nhân sự, chấm công QR, tính lương và Trợ lý ảo AI nội bộ của Group 3 HCM.
+
+Theo dõi phạm vi và bằng chứng còn thiếu tại [AI acceptance](docs/AI_ACCEPTANCE.md). ReportRun POST mặc định SELF cho báo cáo thông thường; HEADCOUNT dùng DIRECT_REPORTS/COMPANY theo role, approval queue chỉ DIRECT_REPORTS. Tài khoản chưa gắn employee không được SELF/DIRECT_REPORTS. Đọc run FAILED không đổi trạng thái thành EXPIRED. Nháp nghỉ kiểm số dư theo năm của ngày nghỉ, không lấy nhầm năm hiện tại khi qua giao năm.
+
+Contracts frontend dùng chung tại `frontend/src/types/ai.ts` và `reports.ts`; action có union theo action_type. Suggestion trả default_inputs từ cùng resolver dùng khi thực thi; input khởi tạo nháp/report được kiểm theo allowlist và quyền. Fallback gợi ý lọc theo actor đã đăng nhập, không giả định mọi tài khoản có employee. Lỗi tải blob PDF/XLSX đọc envelope JSON; hết phiên chuyển login kèm thông báo cố định, giữ ngoại lệ kiosk.
+
+Migration `d9e0f1a2b3c4` thêm currency_code vào PayrollLine snapshot. Tính lương mới chép mã từ hồ sơ nguồn; report/Excel tách từng currency, không quy đổi. Legacy giữ NULL vì chưa lưu mã tại thời điểm tính: báo cáo từ chối với PAYROLL_CURRENCY_UNAVAILABLE cho tới khi HR xác minh, không tự gán VND từ hồ sơ hiện tại. Công thức lương/thuế hiện hữu không thay đổi; đây là lưu/xuất snapshot, không bổ sung cách tính lương quốc tế.
+
+ReportRun lưu `GENERATING → READY/FAILED` bằng giao dịch riêng; chỉ READY sau khi lưu cả snapshot và XLSX. Phạm vi nhân viên được chốt trước truy vấn, giao với quyền hiện thời; preview/download kiểm lại toàn bộ phạm vi. Lịch sử hiển thị lỗi thất bại bằng mã an toàn, không chứa chi tiết DB hoặc đường dẫn private. Cleanup mặc định chỉ xem trước; `--apply` dọn artifacts hết hạn và giữ trạng thái FAILED trong lịch sử 30 ngày. Luồng DB thực tế vẫn cần nghiệm thu.
+
+Ba gợi ý tra cứu quy định dùng kiến thức đã công bố; nếu nguồn đã bị thu hồi hoặc không còn phù hợp, trả `KNOWLEDGE_NOT_FOUND` và không gọi Gemini. Tra cứu chính sách theo quyền không yêu cầu tài khoản phải liên kết hồ sơ nhân viên.
+
+Yêu cầu báo cáo tự do có nháp `DRAFT_REPORT` theo owner/revision/TTL: hỏi loại → kỳ → phạm vi còn thiếu, đưa nút chọn từ catalog được cấp quyền và kiểm lại quyền từng lượt. Kỳ hỗ trợ tháng này/tháng trước, tháng số/năm hoặc hai ngày ISO; lương yêu cầu trọn tháng. Gợi ý có sẵn giữ mặc định minh bạch; khi đủ dữ liệu, chatbot tạo ReportRun thật và mở preview/XLSX bằng run_id. Shortcut truyền cả bộ lọc phòng ban; lượt chat mới vô hiệu hóa action cũ.
+
+Lỗi API AI/knowledge/reports trả envelope `code/message/message_code/request_id/action=null/sources=[]`, giữ HTTP status và mã `detail` tương thích. Thông báo theo catalog cố định; validation không trả lại prompt/input, lỗi hệ thống không lộ DB/file path. Header `X-Request-ID` do server tạo, dùng cùng ID với audit; `Retry-After` được giữ khi hạn mức. Chat cho phép chỉ gửi suggestion_id hoặc inputs của nháp; mọi lượt dùng draft_id bắt buộc có draft_revision.
+
+Tham khảo của gợi ý soạn/duyệt phép trỏ LEAVE.REQUEST; báo cáo cá nhân trỏ REPORT.CATALOG, phạm vi nhóm trỏ REPORT.ACCESS. Ba PDF demo có mục lục, bookmark theo section_code và số trang; PDF báo cáo mô tả đủ bảy loại và thao tác preview/Excel. File report hết hạn của chính owner trả 410 REPORT_EXPIRED; UUID ngoài owner vẫn 404.
+
+Cleanup CLI cũng dọn artifacts UUID không còn được bất kỳ run nào tham chiếu sau hai giờ và metadata hết hạn quá 30 ngày khi có --apply. Scan không đụng file mới, file được tham chiếu, symlink hoặc tên ngoài định dạng server. Bản thảo Markdown của ba PDF được generator ghi trong `docs/knowledge-drafts` để team rà nội dung trước công bố.
 
 > 📚 **Tài liệu kỹ thuật chuyên sâu:**
 > - 🏛️ **Kiến trúc phần mềm chi tiết (SAD):** [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 > - 🚀 **Hướng dẫn cài đặt & vận hành (Setup Guide):** [docs/SETUP_GUIDE.md](docs/SETUP_GUIDE.md)
+> - **Luồng AI:** [AI Copilot](docs/AI_COPILOT.md) — kiến trúc, công cụ, phân quyền và giới hạn kiểm chứng hiện tại.
+
+Khi thêm hoặc thay đổi tính năng, agent cập nhật đồng bộ README, ARCHITECTURE và SETUP_GUIDE trong cùng phần việc để team cùng follow; nội dung đã triển khai và kế hoạch phải được phân biệt rõ.
 
 ---
 
@@ -22,7 +48,7 @@ Hệ thống áp dụng cho **một văn phòng/chi nhánh duy nhất**, không 
 ### 1.2 Quy định chấm công QR & Xử lý quên quét thẻ
 - **Thẻ QR:** Mỗi nhân viên được cấp một thẻ vật lý tĩnh mang mã token hash an toàn, không thay đổi theo thời gian.
 - **Kiosk chấm công:** Chạy trực tiếp trên trình duyệt Web (online kết nối server), quét nhận diện lượt vào (`CHECK_IN`) và ra (`CHECK_OUT`).
-- **Xử lý quên quẹt thẻ:** 
+- **Xử lý quên quẹt thẻ:**
   - Nhân viên phát hiện thiếu lượt vào/ra cần nộp yêu cầu **Giải trình chấm công** trên hệ thống.
   - **Hạn chốt giải trình:** Giải trình phải được gửi và được Quản lý duyệt **trước ngày chốt công cuối tháng**.
   - **Mất công:** Mọi trường hợp thiếu lượt vào hoặc ra mà không được duyệt giải trình kịp trước ngày chốt tháng xem như **mất ngày công và không được tính lương**.
@@ -45,6 +71,7 @@ Hệ thống áp dụng cho **một văn phòng/chi nhánh duy nhất**, không 
   1. Đơn giải trình bổ sung chấm công.
   2. Đơn xin nghỉ phép (hưởng lương và không lương).
 - Quy trình phê duyệt diễn ra độc lập, **không cần thông qua HR duyệt**.
+- Duyệt/từ chối cùng một đơn nghỉ phép được tuần tự hóa: chỉ quyết định đầu tiên trên đơn `PENDING` được áp dụng; lượt sau trả HTTP 400 với trạng thái đã xử lý, không trừ phép lần nữa.
 
 ### 1.6 Kỳ tính công, Lương và Thuế
 - **Kỳ tính công & lương:** Chạy từ **ngày 01 đến ngày cuối cùng của tháng**.
@@ -99,7 +126,7 @@ Hệ thống áp dụng cho **một văn phòng/chi nhánh duy nhất**, không 
 ### 3.4 Quản lý nghỉ phép & Số dư phép năm
 - Nhân viên gửi đơn nghỉ phép: Chọn loại nghỉ (Phép năm `ANNUAL`, Nghỉ không lương `UNPAID`, Nghỉ ốm `SICK`), chọn buổi (`MORNING` 4h, `AFTERNOON` 4h, hoặc `FULL_DAY` 8h).
 - Quản lý trực tiếp tiếp nhận thông báo và phê duyệt đơn trực tuyến.
-- Quản lý số dư phép năm (`hr_employee_leave_balances`): 
+- Quản lý số dư phép năm (`hr_employee_leave_balances`):
   - Hiển thị tổng ngày phép, số ngày đã nghỉ, số ngày còn lại.
   - Hết phép năm tự động yêu cầu chuyển sang nghỉ không lương.
   - Reset/hết hạn số dư phép vào cuối năm.
@@ -113,19 +140,56 @@ Hệ thống áp dụng cho **một văn phòng/chi nhánh duy nhất**, không 
   - Cho phép HR rà soát, ghi chú điều chỉnh bổ sung và chốt kỳ lương (`CLOSED`).
 - Kết xuất bảng lương tháng ra file **Excel** chuẩn cho kế toán và gửi phiếu lương cá nhân cho nhân viên.
 
-### 3.6 Trợ lý ảo AI nội bộ (HR AI Chatbot Assistant) ⭐
-Hệ thống tích hợp một chatbot AI thông minh ngay trên giao diện web (dành cho mọi nhân viên và quản lý), đảm nhận các chức năng:
-1. **Hỏi đáp chính sách công ty (Policy Q&A):**
-   - Trả lời tức thì các câu hỏi về quy định giờ giấc (8h-17h), thời gian nghỉ trưa, quy chế chấm công, xử lý quên quẹt thẻ.
-   - Giải đáp quy định tính ngày công nghỉ lễ, điều kiện hưởng phép năm, chế độ nghỉ không lương.
-   - Hướng dẫn cách tính lương GROSS, các khoản trừ BHXH/BHYT/BHTN và thuế TNCN theo luật.
-2. **Tra cứu dữ liệu cá nhân theo ngữ cảnh (Contextual Data Lookup):**
-   - Nhân viên hỏi: *"Tháng này tôi đã đi làm bao nhiêu công rồi?"*, *"Tôi có ngày nào quên check-out không?"* $\rightarrow$ AI tự động truy vấn bảng công cá nhân để trả lời chính xác.
-   - Nhân viên hỏi: *"Tôi còn bao nhiêu ngày phép năm?"* $\rightarrow$ AI tra cứu `hr_employee_leave_balances` và phản hồi số ngày phép còn lại.
-3. **Hỗ trợ tạo đơn tự động bằng ngôn ngữ tự nhiên (AI Function Calling):**
-   - **Tạo đơn nghỉ phép:** Khi nhân viên chat *"Thứ Sáu tuần này tôi muốn xin nghỉ buổi sáng vì bận việc gia đình"* $\rightarrow$ AI nhận diện ngày, buổi `MORNING`, loại phép, kiểm tra số dư phép và tạo sẵn bản nháp đơn hoặc submit đơn giúp nhân viên sau khi xác nhận.
-   - **Tạo giải trình chấm công:** Khi nhân viên chat *"Hôm qua ngày 02/10 tôi quên quẹt thẻ lúc về 17h, tạo giải trình giúp tôi"* $\rightarrow$ AI tự động điền form giải trình `CHECK_OUT` gửi tới Quản lý trực tiếp phê duyệt.
+### 3.6 Trợ lý AI nội bộ
 
+
+**Luồng AI chatbox:** dùng cùng chat cho số dư phép/chấm công, nháp nghỉ phép/giải trình, hàng đợi duyệt, chính sách/tài liệu và bảy template báo cáo. Python nhận dạng ngày/bộ lọc phổ biến, tổng hợp DB theo JWT và kiểm tra nghiệp vụ. Gemini chỉ hỗ trợ câu khó và gợi ý tham số theo schema đóng; không có kết nối SQL.
+
+- Hỏi số dư phép: trả dữ liệu thực tế của người đăng nhập, kèm chính sách published còn hiệu lực và đúng quyền nếu tìm được nguồn. Chấm công chỉ phản ánh bản ghi hiện có trong kỳ đã chọn.
+- Soạn đơn: giữ ngày/loại đã nhận dạng, hỏi phần thiếu; thiếu phép năm cảnh báo sớm. Người dùng chọn loại khác đang hoạt động, không tự đổi sang không lương. Hỏi số dư trong khi soạn vẫn giữ nháp. Gửi đơn qua form và quản lý trực tiếp.
+- Báo cáo: yêu cầu trong chat → hỏi kỳ/phạm vi thiếu → tạo snapshot/template → preview bảng và Tải Excel → Chỉnh qua chat để tạo snapshot mới. Không có tab/trang báo cáo hoặc lịch sử tải. Route /reports cũ mở chat; API giữ tương thích. Khi mở snapshot mới, preview bắt đầu ở trang 1. Yêu cầu lương tháng này dùng trọn tháng, kể cả loại báo cáo do intent dispatch xác định.
+- Tài liệu: HR/ADMIN kéo thả PDF, đặt tên dễ hiểu trước khi lưu nháp; giới hạn người đọc là tùy chọn. Section/trang tự tạo theo heading có số, hoặc theo trang khi không nhận diện được heading. Mỗi lần tải mới tăng phiên bản, cần kiểm tra rồi công bố.
+
+Kiến trúc và điểm mở rộng: [AI chatbox](docs/AI_COPILOT.md), [Architecture](docs/ARCHITECTURE.md#kiến-trúc-ai-chatbox-và-công-cụ). Cấu hình và nghiệm thu: [Setup](docs/SETUP_GUIDE.md#kiểm-tra-flow-ai-chatbox).
+
+
+Gợi ý chat được thu gọn trong menu “Gợi ý câu hỏi”; khi soạn nháp chỉ hiện lựa chọn cần thiết cho bước hiện tại.
+
+
+Chat nhận ngày dạng “10 08 2026”, “ngày mốt”, “thứ 3 tuần sau”, “thứ 2 tuần trước” và ngày cụ thể trong tháng sau. Khi Python chưa nhận được ngày, Gemini hỗ trợ text-to-date nếu đã bật; chỉ gửi từ vựng ngày tối đa 200 ký tự và ngày hiện tại ở Việt Nam, không gửi lịch sử/DB/lý do. Ngày không rõ hoặc lỗi provider vẫn cần hỏi lại. Yêu cầu đầu tiên giữ loại phép/ngày đã nêu và hỏi gộp buổi nghỉ với lý do còn thiếu. Dialog vừa viewport; thao tác điều hướng là nút có tên, nháp đơn hiển thị thông tin trước khi mở form.
+
+Màn hình báo cáo tải bảng theo bộ lọc mặc định, có nút áp dụng bộ lọc và “Tải về ▾” cho Excel/CSV từ cùng snapshot đang xem. Chọn phòng ban theo tên, kỳ lương theo tháng; không hiển thị lịch sử tải trên màn hình. Bảng cố định cột nhận diện, cuộn ngang/dọc và phân trang; dữ liệu rỗng vẫn giữ tiêu đề cột. Bảy template Excel có tiêu đề theo nghiệp vụ, ngày/giờ Việt Nam, format số, bảng có bộ lọc và bố cục in A4; dữ liệu không được tính lại khi định dạng.
+
+
+Phản hồi chat và mỗi mục lịch sử dùng chung giới hạn 8.000 ký tự để phản hồi RAG dài vẫn hợp lệ ở lượt kế tiếp; câu hỏi mới tối đa 2.000 ký tự, lịch sử tối đa 12 mục. RAG yêu cầu nội dung đoạn trích khớp ít nhất 35% token câu hỏi; tiêu đề chỉ tăng điểm xếp hạng. Kiểm tra PDF duyệt các action theo sự kiện trong `/AA` và chuỗi `/Next`, gồm mảng và tham chiếu gián tiếp, có chống vòng lặp.
+
+`POST /api/v1/ai/chat` lấy danh tính và role từ JWT; schema từ chối field lạ như `employee_id`, `roles` và system-role trong history. Các intent hiện có tra số dư phép/công đã ghi, tạo nháp phép hoặc giải trình, và tìm trích đoạn trong tài liệu knowledge đã publish. Nháp nhiều lượt gắn với user đăng nhập, chỉ chứa trường được allowlist, hết hạn sau 15 phút và chỉ mở form để người dùng kiểm tra/gửi; chatbot không tự tạo bản ghi nghiệp vụ.
+
+Bảy loại báo cáo ATTENDANCE, LEAVE, ATTENDANCE_FIX, APPROVAL_QUEUE, HEADCOUNT, MY_PAYSLIP và PAYROLL_SUMMARY có JSON/CSV/XLSX từ dữ liệu thật, với `private, no-store`. Bảy template `.xlsx` v1 nằm trong `backend/app/report_templates`; workbook có sheet thông tin/dữ liệu/tổng hợp, chống formula injection và lưu tiền vượt 15 chữ số dưới dạng text chính xác. Giới hạn 10.000 dòng, vượt giới hạn yêu cầu thu hẹp bộ lọc. `POST /api/v1/reports/runs` lưu preview và XLSX private trong 1 giờ; chỉ chủ sở hữu xem/tải, có kiểm lại quyền/scope. Script `backend/scripts/cleanup_expired_report_runs.py` dọn artifacts hết hạn. Nhân viên dùng SELF; quản lý dùng SELF/DIRECT_REPORTS; HR/ADMIN dùng COMPANY với loại report được cấp quyền. Bộ lọc phòng ban chỉ thu hẹp dữ liệu. Phiếu lương chỉ SELF; tổng hợp lương chỉ HR/ADMIN, theo phòng ban hiện tại, kỳ trọn tháng APPROVED/CLOSED. Report đọc currency snapshot, tách tổng theo tiền tệ và không tính lại lương khi export; legacy thiếu currency cần HR xác minh. Chatbot lấy gợi ý có link section PDF theo role; shortcut mở đúng form/tab, không tự gửi hoặc duyệt đơn. DB/browser integration còn cần kiểm chứng.
+
+Knowledge hỗ trợ upload PDF riêng tư, version/section, kiểm tra heading/page từ text trích xuất, publish/archive và viewer xác thực bằng PDF.js worker local. Thêm tài liệu cho phép chọn/kéo nhiều PDF; mỗi file tạo một tài liệu nháp riêng, tải lần lượt và hiển thị kết quả từng file. Thử lại chỉ gửi file lỗi, không gửi lại file đã lưu. Một phiên bản mới vẫn nhận một PDF. PDF scan cần OCR trước; lỗi mật khẩu, dung lượng, số trang hoặc nội dung tương tác có thông báo cụ thể. Ba PDF mẫu về nghỉ phép, chấm công và bảo mật báo cáo nằm trong `backend/storage/tmp/ai-knowledge-demo`; tất cả được đánh dấu bản nháp, chưa phải quy định công ty đã ban hành. Chạy script tạo lại PDF rồi seed có xác nhận vào môi trường development/test; seed chỉ tạo DRAFT, lưu file vào storage riêng tư, và không ghi đè nội dung khác. Migration backfill legacy text không gán page/PDF giả. Báo cáo được xem trước và tải XLSX trong chat theo owner; không có lịch sử tải trên UI, còn cần xác minh DB tích hợp.
+
+HR/ADMIN sửa tên/quyền/hiệu lực và section mapping của phiên bản DRAFT qua `PUT /ai/knowledge/{documentId}/versions/{versionId}` hoặc `PUT .../sections`. Mapping được đối chiếu heading/trang và hash PDF trước khi lưu; `is_answerable=false` giữ mục chưa ban hành ngoài câu trả lời AI. Bản PUBLISHED không thể sửa mapping. UI có “Sửa mục/trang”, “Xem trước” và công bố sau kiểm tra; preview yêu cầu quyền quản trị trên cả document/version, flag `preview=true` không cấp quyền. File tải được kiểm SHA-256; danh sách phiên bản cũng lọc quyền từng version.
+
+Danh sách đơn dùng `view=mine|approvals|visible`. `approvals` chỉ trả PENDING của nhân viên đang có quan hệ quản lý trực tiếp với người gọi; duyệt/từ chối cũng kiểm tra lại quan hệ hiện tại và cấm tự duyệt, kể cả tài khoản ADMIN. HR có thể duyệt nếu là quản lý trực tiếp. Citation của PDF chứa mã mục/trang và mở viewer đúng phiên bản; tài liệu legacy không có liên kết trang.
+
+Kho tài liệu hỗ trợ tìm tên/mã không dấu, lọc trạng thái và người đọc, đổi tên hiển thị (`PATCH /api/v1/ai/knowledge/{id}/title`), xem nội dung văn bản hoặc toàn bộ PDF và tải PDF. HR/ADMIN được xem/tải phiên bản lưu trữ bằng preview có kiểm JWT/quyền và hash; nhân viên không được đọc nguồn lưu trữ. Viewer có thanh Trước/Trang/Sau giữ vị trí khi cuộn. “Kiểm tra & công bố” hiển thị tên phiên bản, quyền đọc, hiệu lực, mục/trang và các mục AI được dùng; PDF mở ở tab riêng để giữ bước kiểm tra. “Khôi phục về bản nháp” (`POST /api/v1/ai/knowledge/{id}/restore`) tạo phiên bản DRAFT mới từ PDF và mapping đã lưu, không yêu cầu tải lại; phiên bản cũ giữ trong lịch sử ARCHIVED. Bản nháp cần công bố mới trở thành nguồn AI; tài liệu văn bản không có PDF được khôi phục trạng thái DRAFT.
+
+Chat ưu tiên các câu hỏi chính sách/quy trình/hướng dẫn trước handler tạo đơn: “Quy trình tạo đơn nghỉ phép là gì?” trả đoạn từ nguồn đã công bố kèm **Xem đúng mục**, không tự tạo đơn. RAG lọc quyền, publish, thời gian hiệu lực và is_answerable trước tìm kiếm; ưu tiên heading phù hợp và không lặp liên kết cùng section. Nếu không có nguồn đủ căn cứ, trả KNOWLEDGE_NOT_FOUND. Kho chỉ có bản nháp/lưu trữ chưa thể trả lời chính sách; HR cần kiểm tra và công bố tài liệu được phép sử dụng.
+
+Bản nháp có nút **Kiểm tra & công bố ngay trong danh sách** để mở thẳng bản PDF nháp mới nhất, không cần qua lịch sử phiên bản. Lịch sử/tải bản mới nằm trong menu thao tác; tài liệu đã công bố có mục kiểm tra bản nháp thay thế trong menu. Tài liệu văn bản legacy mở form hiện có.
+
+Khi Gemini bật và có key, hỏi đáp chính sách dùng Gemini viết lời giải thích tự nhiên theo câu hỏi và các nguồn được phép đọc, không dùng bảng mẫu câu trả lời theo chủ đề. Mỗi ý có citation và evidence nguyên văn; backend kiểm ID nguồn, đoạn evidence và số liệu mới trước hiển thị. Giữ nguyên điều kiện/ngoại lệ và nhắc khi nội dung nguồn còn ghi dự thảo/chưa xác nhận. Kiểm evidence không chứng minh mọi sắc thái diễn giải đều đúng. Provider lỗi hoặc evidence không hợp lệ dùng fallback tối đa ba câu liên quan, không dán trang PDF hay câu cắt dở. Nguồn/đường dẫn do server tạo, LLM không quyết định quyền hoặc URL.
+
+Gemini chỉ phân loại intent vào enum đóng sau khi fallback xác định không xử lý được; backend tự parse dữ liệu, kiểm tra quyền rồi mới gọi handler. Prompt provider đã bỏ history và làm mờ email, số điện thoại, ngày/giờ, ID số và đoạn lý do; không gửi personal context, dữ liệu báo cáo hoặc truy vấn DB. Nội quy ưu tiên trả nguồn xác định; chỉ dùng Gemini khi người dùng yêu cầu tóm tắt/giải thích/so sánh và chỉ nhận quote nguyên văn theo schema đóng. Lỗi provider dùng fallback nguồn hoặc mã `AI_UNAVAILABLE`.
+
+Gợi ý “Tạo báo cáo công của tôi tháng này” tạo ReportRun/XLSX thật qua ReportRunService; chat mở preview của run_id và tải cùng snapshot. Kỳ khác được hỏi/chỉnh trong chat. Prompt cá nhân người khác hoặc phạm vi trái quyền bị từ chối. Nháp một/nhiều lượt dùng chung validation, giữ lý do và revision.
+
+Gợi ý có `suggestion_id` và `catalog_version`; backend resolve prompt chuẩn và kiểm lại quyền từ registry, không tin prompt/handler do client sửa. Follow-up draft có thể gửi `inputs` theo field allowlist; UI có nút chọn buổi/loại nghỉ/lượt công và hủy. Response thêm `status`, `missing_fields`, `message_code`, `request_id`. Action kiểm tra field và route theo action_type; không nhận URL hoặc employee ID tùy ý. Lý do khám bệnh không tự chọn SICK; thiếu nguồn nội quy trả `KNOWLEDGE_NOT_FOUND`, yêu cầu trái quyền chat trả HTTP 403.
+
+GET /api/v1/reports/catalog trả template/filter/scopes được cấp quyền cho công cụ AI. API lịch sử run vẫn giữ tương thích và lọc owner, UI không hiển thị lịch sử. Preview hỗ trợ offset/limit, file đầy đủ tải bằng download; khi hết hạn cần tạo run mới.
+
+Audit `hr_ai_request_events` chỉ giữ actor/request ID/lệnh/phạm vi/kết quả/thời gian, không lưu prompt, history hoặc lý do. PostgreSQL advisory lock giới hạn mỗi tài khoản 20 chat và 5 lần tạo báo cáo mỗi phút trên mọi process; lỗi kho bảo mật trả 503, quá hạn mức trả 429 kèm `Retry-After`. Script retention mặc định dry-run, giữ audit 90 ngày. Migration mới cần được áp dụng trước khi chạy API. Quy tắc phát hành lương đã chốt: **APPROVED hoặc CLOSED**. Xem [AI Copilot](docs/AI_COPILOT.md) và [AI acceptance](docs/AI_ACCEPTANCE.md) để biết luồng hiện tại và giới hạn kiểm chứng.
 ---
 
 ## 4. Thiết kế Cơ sở dữ liệu
@@ -138,26 +202,26 @@ erDiagram
     hr_positions ||--o{ hr_employees : "đảm nhiệm chức vụ"
     hr_employees ||--o{ hr_employees : "quản lý trực tiếp (manager_id)"
     hr_employees ||--|| hr_user_accounts : "tài khoản đăng nhập"
-    
+
     hr_user_accounts ||--o{ hr_user_role_assignments : "gán vai trò"
     hr_roles ||--o{ hr_user_role_assignments : "định nghĩa quyền"
-    
+
     hr_user_accounts ||--o{ hr_holidays : "cấu hình ngày lễ"
-    
+
     hr_employees ||--o{ hr_qr_cards : "sở hữu thẻ"
     hr_employees ||--o{ hr_attendance_events : "phát sinh quét QR"
     hr_qr_cards ||--o{ hr_attendance_events : "xác thực qua thẻ"
     hr_attendance_fixes ||--o| hr_attendance_events : "sinh event điều chỉnh"
-    
+
     hr_employees ||--o{ hr_attendance_days : "tổng hợp ngày công"
     hr_employees ||--o{ hr_attendance_fixes : "gửi giải trình"
     hr_employees ||--o{ hr_attendance_fixes : "quản lý duyệt"
-    
+
     hr_employees ||--o{ hr_employee_leave_balances : "hạn mức phép năm"
     hr_leave_types ||--o{ hr_leave_requests : "loại nghỉ phép"
     hr_employees ||--o{ hr_leave_requests : "nộp đơn nghỉ"
     hr_employees ||--o{ hr_leave_requests : "quản lý duyệt"
-    
+
     hr_employees ||--o{ hr_employee_compensation : "mức lương hợp đồng"
     hr_payroll_periods ||--o{ hr_payroll_lines : "chi tiết kỳ lương"
     hr_employees ||--o{ hr_payroll_lines : "nhận bảng lương"
@@ -391,6 +455,7 @@ Table hr_payroll_lines {
 	payroll_period_id bigint [not null]
 	employee_id bigint [not null]
 	base_salary decimal(18, 2) [not null, note: 'Lương GROSS hợp đồng']
+	currency_code varchar(3) [note: 'Snapshot mã tiền tệ; NULL cho legacy chưa xác minh, không tự suy ra VND']
 	standard_work_days decimal(4, 1) [not null, note: 'Ngày công chuẩn trừ T7, CN và tính công Lễ']
 	actual_work_days decimal(4, 1) [not null, note: 'Ngày công thực tế hưởng lương']
 	gross_salary decimal(18, 2) [not null]
@@ -465,3 +530,25 @@ API sử dụng tiền tố `/api/v1`. Toàn bộ API yêu cầu xác thực JWT
 3. **Chặn sửa ngày lễ quá khứ:** API `PATCH/DELETE /holidays/{id}` bắt buộc từ chối nếu `holiday_date < CURRENT_DATE`.
 4. **Hạn chốt giải trình công:** Các yêu cầu giải trình công cho tháng cũ chỉ được duyệt trước thời điểm HR chốt kỳ lương (`CLOSED`). Sau khi kỳ đã đóng, mọi giải trình chưa duyệt đều tự động coi như không hợp lệ.
 5. **Function Calling của AI:** Endpoint `POST /ai/chat` khi nhận intent tạo đơn (nghỉ phép/giải trình) sẽ kích hoạt công cụ nội bộ gọi trực tiếp service tương ứng với đầy đủ bước validate, trả về kết quả kèm mã đơn để người dùng xác nhận.
+
+### Công cụ phân tích dữ liệu trong AI chat
+
+Báo cáo và phân tích chỉ dành cho MANAGER/HR/ADMIN. EMPLOYEE đơn thuần không được tạo báo cáo, kể cả dữ liệu SELF; prompt bị ẩn và API/service chặn trực tiếp. MANAGER giữ scope SELF/DIRECT_REPORTS, tổng hợp lương và COMPANY chỉ HR/ADMIN. Tra cứu công/phép, xem phiếu lương cá nhân và soạn đơn vẫn theo quyền cá nhân. Ma trận prompt, điều kiện và điểm kiểm quyền: [AI_PROMPT_PERMISSIONS](docs/AI_PROMPT_PERMISSIONS.md).
+
+Revision `0a1b2c3d4e5f` cho phép audit REPORT_ANALYSIS; chạy upgrade trước khi phân tích. Lỗi phân tích hiển thị thông báo backend cụ thể, gồm mất quyền/hết hạn/rate limit/thiếu thư viện; không gộp thành cảnh báo thư viện chung.
+
+Chat nhận “phân tích chấm công của tôi tháng trước” để chọn báo cáo/phạm vi/kỳ; phần thiếu được hỏi lại. Sau khi tạo báo cáo, chọn **Phân tích & biểu đồ** trong preview để xem tổng, trung bình, trung vị, min/max và tải PNG. “Phân tích báo cáo này” dùng snapshot gần nhất trong chat. Công cụ dùng pandas, NumPy và Matplotlib; không thực thi Python/SQL do người dùng hoặc Gemini sinh ra. Hiện hỗ trợ thống kê mô tả theo chỉ số cố định, chưa hỗ trợ dữ liệu tải lên tùy ý hay dự báo.
+
+API `GET /api/v1/reports/runs/{run_id}/analysis` kiểm owner, hạn dùng và quyền hiện tại như preview/download; trả thống kê, tần suất và PNG base64 của toàn bộ snapshot, tối đa 10.000 dòng. Tiền tính bằng Decimal; không cộng gộp khác loại tiền tệ.
+
+Biểu đồ chọn theo nghiệp vụ: nhân sự dùng thanh ngang theo phòng ban, xếp chồng trạng thái và đếm số người; công so sánh tổng ngày có mặt/thiếu lượt/vắng; phép so sánh ngày đã duyệt và số dư; lương so sánh GROSS/thực nhận theo phòng ban hoặc các khoản trong phiếu lương. Nhãn tiếng Việt, đơn vị rõ ràng; không vẽ Min/Median/Mean/Max thành các nhóm. Trên 20 phòng ban, gộp phần còn lại để giữ tổng; nhiều loại tiền chỉ biểu diễn số nhân viên, không gộp tiền.
+
+### Demo seed and QR schema
+
+Alembic chạy tại `backend/`, hoặc từ root dùng `python -B -m alembic -c backend/alembic.ini upgrade head` với interpreter hr-backend. Script/import paths dựa trên vị trí config; migration đọc `backend/.env`. PostgreSQL phải nhận kết nối trước khi upgrade; không tự khởi tạo DB hoặc seed.
+
+Head hợp nhất QR/AI là `f1a2b3c4d5e6`; hai nhánh QR thêm `card_code` theo cách không trùng cột. Không reset/stamp DB để xử lý lỗi nhiều head.
+
+PostgreSQL startup does not seed data automatically. From backend/, run `alembic upgrade head` before `python -m app.scripts.seed_data`. Migration `e0f1a2b3c4d5` adds the nullable `hr_qr_cards.card_code` column required by the existing ORM. Seed commits once at the end; a failure rolls back new records from that run.
+
+Chat nhận các cách hỏi số dư như “thông tin ngày nghỉ của tôi”, “tôi còn bao nhiêu ngày nghỉ” và “còn mấy ngày phép” bằng Python, không cần Gemini. Filter “tháng trước/tháng này/tháng sau/tháng tới” tính theo ngày hiện tại Asia/Ho_Chi_Minh; tháng sau là trọn tháng kế tiếp, không phải dự báo dữ liệu chưa có.

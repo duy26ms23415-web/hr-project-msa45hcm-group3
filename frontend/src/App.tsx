@@ -11,6 +11,10 @@ import { LeavePage } from './pages/LeavePage';
 import { PayrollPage } from './pages/PayrollPage';
 import { KioskScanPage } from './pages/KioskScanPage';
 import { EmployeesPage } from './pages/EmployeesPage';
+import { lazy, Suspense } from 'react';
+
+const KnowledgePage = lazy(() => import('./pages/KnowledgePage').then(module => ({ default: module.KnowledgePage })));
+const KnowledgeViewerPage = lazy(() => import('./pages/KnowledgeViewerPage').then(module => ({ default: module.KnowledgeViewerPage })));
 
 const ProtectedRoute: React.FC<{ children: React.ReactNode; requiredRoles?: string[] }> = ({
   children,
@@ -68,6 +72,9 @@ function AppRoutes() {
         <Route path="leaves" element={<LeavePage />} />
         <Route path="payroll" element={<PayrollPage />} />
         <Route path="kiosk" element={<KioskScanPage />} />
+        <Route path="reports" element={<ProtectedRoute requiredRoles={['MANAGER', 'HR', 'ADMIN']}><Navigate to="/dashboard" state={{ openAI: true }} replace /></ProtectedRoute>} />
+        <Route path="knowledge/view/:documentId" element={<Suspense fallback={<Spin />}><KnowledgeViewerPage /></Suspense>} />
+        <Route path="knowledge" element={<ProtectedRoute requiredRoles={['ADMIN', 'HR']}><Suspense fallback={<Spin />}><KnowledgePage /></Suspense></ProtectedRoute>} />
         <Route
           path="employees"
           element={

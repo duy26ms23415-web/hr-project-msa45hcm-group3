@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Layout, Menu, Button, Avatar, Dropdown, Space, Tag, Typography } from 'antd';
+import React, { useEffect, useState } from 'react';
+import { Layout, Menu, Button, Avatar, Dropdown, Space, Tag } from 'antd';
 import {
   DashboardOutlined,
   TeamOutlined,
@@ -17,7 +17,6 @@ import { useAuth } from '../context/AuthContext';
 import { AIChatModal } from './AIChatModal';
 
 const { Header, Sider, Content } = Layout;
-const { Text } = Typography;
 
 export const MainLayout: React.FC = () => {
   const { user, logout, hasRole } = useAuth();
@@ -25,6 +24,13 @@ export const MainLayout: React.FC = () => {
   const location = useLocation();
   const [collapsed, setCollapsed] = useState(false);
   const [aiModalOpen, setAiModalOpen] = useState(false);
+
+  useEffect(() => {
+    if (location.state?.openAI) {
+      setAiModalOpen(true);
+      navigate(location.pathname, { replace: true, state: null });
+    }
+  }, [location.state, location.pathname, navigate]);
 
   const menuItems = [
     {
@@ -52,6 +58,7 @@ export const MainLayout: React.FC = () => {
       icon: <QrcodeOutlined />,
       label: 'Màn hình Kiosk',
     },
+    ...(hasRole(['ADMIN', 'HR']) ? [{ key: '/knowledge', icon: <RobotOutlined />, label: 'Tài liệu & chính sách' }] : []),
     ...(hasRole(['ADMIN', 'HR', 'MANAGER'])
       ? [
           {
@@ -241,11 +248,11 @@ export const MainLayout: React.FC = () => {
                 }}
               >
                 <Avatar style={{ backgroundColor: '#1677ff' }} icon={<UserOutlined />} />
-                <div style={{ display: 'flex', flexDirection: 'column', textAlign: 'left' }}>
-                  <span style={{ fontSize: 13, fontWeight: 600, lineHeight: 1.2 }}>
+                <div style={{ display: 'flex', flexDirection: 'column', textAlign: 'left', lineHeight: 1.4, maxWidth: 180, minWidth: 0 }}>
+                  <span title={user?.login_email} style={{ fontSize: 13, fontWeight: 600, lineHeight: 1.4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {user?.login_email.split('@')[0]}
                   </span>
-                  <span style={{ fontSize: 11, color: '#64748b' }}>
+                  <span style={{ fontSize: 11, color: '#64748b', lineHeight: 1.4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {user?.roles.join(', ')}
                   </span>
                 </div>
@@ -264,8 +271,8 @@ export const MainLayout: React.FC = () => {
         </Content>
       </Layout>
 
-      {/* Floating AI Button at bottom right */}
-      <div
+      {/* Keep the table toolbar clear; the header still opens the assistant. */}
+      {!aiModalOpen && !location.pathname.startsWith("/reports") && <div
         style={{
           position: 'fixed',
           bottom: 28,
@@ -288,9 +295,9 @@ export const MainLayout: React.FC = () => {
             justifyContent: 'center',
           }}
         />
-      </div>
+      </div>}
 
-      <AIChatModal open={aiModalOpen} onClose={() => setAiModalOpen(false)} />
+      <AIChatModal key={user?.user_account_id ?? 'anonymous'} open={aiModalOpen} onClose={() => setAiModalOpen(false)} />
     </Layout>
   );
 };
