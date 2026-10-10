@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from google.oauth2 import id_token
 from google.auth.transport import requests
+from google.auth.exceptions import GoogleAuthError
 from app.core.database import get_db
 from app.core.security import verify_password, create_access_token, create_refresh_token
 from app.core.config import settings
@@ -54,12 +55,23 @@ async def login(login_data: LoginRequest, db: AsyncSession = Depends(get_db)):
 @router.post("/login/google", response_model=Token)
 async def login_with_google(login_data: GoogleLoginRequest, db: AsyncSession = Depends(get_db)):
     """Authenticate user with Google id_token"""
+    if not settings.GOOGLE_CLIENT_ID:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Server chưa được cấu hình GOOGLE_CLIENT_ID"
+        )
+        
     try:
         idinfo = id_token.verify_oauth2_token(
             login_data.id_token, requests.Request(), settings.GOOGLE_CLIENT_ID, clock_skew_in_seconds=10
         )
+        if not idinfo.get("email_verified"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Email Google chưa được xác thực."
+            )
         email = idinfo.get("email")
-    except ValueError:
+    except (ValueError, GoogleAuthError):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid Google token",

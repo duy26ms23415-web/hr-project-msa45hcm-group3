@@ -1,5 +1,6 @@
 import pytest
 import secrets
+from unittest.mock import patch
 from datetime import date, timedelta
 from httpx import AsyncClient, ASGITransport
 from app.main import app
@@ -160,3 +161,42 @@ async def test_ai_chat_flow():
         chat_data = chat_resp.json()
         assert "reply" in chat_data
         assert "phép" in chat_data["reply"].lower()
+
+
+@pytest.mark.asyncio
+async def test_google_login_invalid_token():
+    """Verify Google login blocks invalid token"""
+    settings.GOOGLE_CLIENT_ID = "mock_client_id"
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        response = await ac.post("/api/v1/auth/login/google", json={"id_token": "fake_invalid_token"})
+    assert response.status_code == 401
+    assert "Invalid Google token" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+@patch("app.api.v1.endpoints.auth.id_token.verify_oauth2_token")
+async def test_google_login_unverified_email(mock_verify):
+    """Verify Google login blocks unverified Google email"""
+    settings.GOOGLE_CLIENT_ID = "mock_client_id"
+    mock_verify.return_value = {"email": "admin@hrgroup3.com", "email_verified": False}
+    
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        response = await ac.post("/api/v1/auth/login/google", json={"id_token": "valid_token_but_unverified_email"})
+    
+    assert response.status_code == 400
+    assert "Email Google chưa được xác thực" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+@patch("app.api.v1.endpoints.auth.id_token.verify_oauth2_token")
+async def test_google_login_success(mock_verify):
+    """Verify Google login succeeds for valid verified employee"""
+    mock_verify.return_value = {"email": "admin@hrgroup3.com", "email_verified": True}
+    settings.GOOGLE_CLIENT_ID = "mock_client_id"
+    
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        response = await ac.post("/api/v1/auth/login/google", json={"id_token": "valid_token_all_good"})
+    
+    assert response.status_code == 200
+    data = response.json()
+    assert "access_token" in data
