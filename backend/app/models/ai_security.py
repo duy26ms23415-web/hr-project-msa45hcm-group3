@@ -25,7 +25,7 @@ class AIRequestEvent(Base):
         ),
         CheckConstraint(
             "action IN ('BUDGET_REQUEST', 'CHAT', 'DRAFT_CREATE', 'DRAFT_UPDATE', "
-            "'DRAFT_CANCEL', 'REPORT_CREATE', 'REPORT_DOWNLOAD', 'UPLOAD', "
+            "'DRAFT_CANCEL', 'REPORT_CREATE', 'REPORT_DOWNLOAD', 'REPORT_ANALYSIS', 'UPLOAD', "
             "'PUBLISH', 'KNOWLEDGE_SEARCH')",
             name="ck_ai_request_event_action",
         ),

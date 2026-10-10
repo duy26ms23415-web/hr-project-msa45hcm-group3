@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Alert, Button, Card, Space, Spin, Typography, message } from 'antd';
-import { ArrowLeftOutlined, FilePdfOutlined } from '@ant-design/icons';
+import { Alert, Button, Card, Space, Spin, Typography, InputNumber, message } from 'antd';
+import { ArrowLeftOutlined, ArrowRightOutlined, FilePdfOutlined, DownloadOutlined } from '@ant-design/icons';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import * as pdfjsLib from 'pdfjs-dist';
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.mjs?url';
@@ -63,7 +63,7 @@ function PdfPage({ document, pageNumber, heading }: { document: PDFDocumentProxy
         if (cancelled) return;
         const textItems = content.items.filter((item): item is TextItem => 'str' in item);
         const target = normalizeText(heading);
-        let matching = textItems.filter(item => normalizeText(item.str).includes(target));
+        let matching = target ? textItems.filter(item => normalizeText(item.str).includes(target)) : [];
         if (matching.length === 0 && target) {
           const lines = new Map<number, TextItem[]>();
           for (const item of textItems) {
@@ -112,16 +112,18 @@ export function KnowledgeViewerPage() {
   const navigate = useNavigate();
   const versionId = Number(query.get('version'));
   const sectionId = Number(query.get('section'));
+  const [currentPage, setCurrentPage] = useState(1);
+  const [downloading, setDownloading] = useState(false);
   const [source, setSource] = useState<SourceReference | null>(null);
   const [pdf, setPdf] = useState<PDFDocumentProxy | null>(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
   const preview = query.get('preview') === 'true';
-  const pages = useMemo(() => source ? Array.from({ length: source.page_end - source.page_start + 1 }, (_, index) => source.page_start + index) : [], [source]);
+  const pages = useMemo(() => source ? sectionId ? Array.from({ length: source.page_end - source.page_start + 1 }, (_, index) => source.page_start + index) : [currentPage] : [], [source, sectionId, currentPage]);
 
   useEffect(() => {
     const id = Number(documentId);
-    if (!Number.isSafeInteger(id) || id < 1 || !Number.isSafeInteger(versionId) || versionId < 1 || !Number.isSafeInteger(sectionId) || sectionId < 1) {
+    if (!Number.isSafeInteger(id) || id < 1 || !Number.isSafeInteger(versionId) || versionId < 1 || (query.has('section') && (!Number.isSafeInteger(sectionId) || sectionId < 1))) {
       setError('Liên kết tài liệu không hợp lệ.');
       setLoading(false);
       return;
@@ -136,12 +138,14 @@ export function KnowledgeViewerPage() {
       setPdf(null);
       try {
         const params = preview ? { preview: true } : undefined;
-        const reference = await api.get<SourceReference>(`/ai/knowledge/${id}/versions/${versionId}/sections/${sectionId}`, { signal: controller.signal, params });
+        const reference = sectionId ? (await api.get<SourceReference>(`/ai/knowledge/${id}/versions/${versionId}/sections/${sectionId}`, { signal: controller.signal, params })).data
+          : { document_id: id, version_id: versionId, section_id: 0, title: (await api.get<{ title: string }>(`/ai/knowledge/${id}`, { signal: controller.signal })).data.title, section_code: '', heading: '', page_start: 1, page_end: 1, anchor: null };
         const file = await api.get<ArrayBuffer>(`/ai/knowledge/${id}/versions/${versionId}/file`, { responseType: 'arraybuffer', signal: controller.signal, params });
         if (!active) return;
-        setSource(reference.data);
         task = pdfjsLib.getDocument({ data: new Uint8Array(file.data) });
-        setPdf(await task.promise);
+        const loaded = await task.promise;
+        if (!active) return;
+        setSource(reference); setCurrentPage(1); setPdf(loaded);
       } catch (failure) {
         if (active) {
           const text = await aiErrorMessage(failure, 'Tài liệu không còn khả dụng hoặc bạn không có quyền truy cập.');
@@ -160,24 +164,46 @@ export function KnowledgeViewerPage() {
       controller.abort();
       void task?.destroy();
     };
-  }, [documentId, sectionId, versionId, preview]);
+  }, [documentId, sectionId, versionId, preview, query]);
+
+  const download = async () => {
+    if (!source) return;
+    setDownloading(true);
+    try {
+      const response = await api.get(`/ai/knowledge/${documentId}/versions/${versionId}/file`, { params: { preview, download: true }, responseType: 'blob' });
+      const url = URL.createObjectURL(response.data);
+      const link = document.createElement('a'); link.href = url; link.download = `${source.title}.pdf`; link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (error) { message.error(await aiErrorMessage(error, 'Không tải được PDF.')); }
+    finally { setDownloading(false); }
+  };
 
   return <Space orientation="vertical" size="large" style={{ width: '100%' }}>
     <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(-1)}>Quay lại</Button>
-    {preview && <Alert type="info" showIcon title="Xem trước dành cho quản trị. Bản DRAFT và mục chưa ban hành không được dùng để trả lời người dùng." />}
+    {preview && <Alert type="info" showIcon title="Xem để kiểm tra dành cho HR/quản trị. Bản nháp và tài liệu lưu trữ không được AI dùng để trả lời." />}
     {loading && <div style={{ padding: 48, textAlign: 'center' }}><Spin size="large" /></div>}
     {error && <Alert type="warning" showIcon title={error} />}
     {source && pdf && <>
-      <Card>
+      <Card extra={<Button icon={<DownloadOutlined />} loading={downloading} onClick={() => void download()}>Tải PDF</Button>}>
         <Space align="start">
           <FilePdfOutlined style={{ fontSize: 24, color: '#d4380d' }} />
           <div>
             <Typography.Title level={4} style={{ marginTop: 0 }}>{source.title}</Typography.Title>
-            <Typography.Text strong>{source.section_code} · {source.heading}</Typography.Text>
-            <div><Typography.Text type="secondary">Phiên bản {source.version_id} · Trang {source.page_start}{source.page_end !== source.page_start ? `–${source.page_end}` : ''}. Phần được tô sáng là mục trích dẫn.</Typography.Text></div>
+            {sectionId > 0 && <Typography.Text strong>{source.section_code} · {source.heading}</Typography.Text>}
+            <div><Typography.Text type="secondary">{pdf.numPages} trang{sectionId ? ` · Mục trích dẫn ở trang ${source.page_start}${source.page_end !== source.page_start ? `–${source.page_end}` : ''}` : ' · Xem toàn bộ tài liệu'}</Typography.Text></div>
           </div>
         </Space>
       </Card>
+      {!sectionId && <div style={{ position: 'sticky', top: 12, zIndex: 2, display: 'flex', justifyContent: 'center', padding: '12px 16px', background: '#fff', border: '1px solid #f0f0f0', borderRadius: 12, boxShadow: '0 2px 8px rgba(0,0,0,.04)' }}>
+        <Space wrap align="center">
+          <Button icon={<ArrowLeftOutlined />} disabled={currentPage <= 1} onClick={() => setCurrentPage(page => page - 1)}>Trước</Button>
+          <Typography.Text>Trang</Typography.Text>
+          <InputNumber aria-label="Trang PDF hiện tại" min={1} max={pdf.numPages} precision={0} controls={false} value={currentPage} style={{ width: 64 }}
+            onChange={value => { if (value != null && Number.isInteger(value) && value >= 1 && value <= pdf.numPages) setCurrentPage(value); }} />
+          <Typography.Text type="secondary">/ {pdf.numPages}</Typography.Text>
+          <Button icon={<ArrowRightOutlined />} iconPlacement="end" disabled={currentPage >= pdf.numPages} onClick={() => setCurrentPage(page => page + 1)}>Sau</Button>
+        </Space>
+      </div>}
       {pages.map(page => <PdfPage key={`${source.version_id}-${page}`} document={pdf} pageNumber={page} heading={source.heading} />)}
     </>}
   </Space>;

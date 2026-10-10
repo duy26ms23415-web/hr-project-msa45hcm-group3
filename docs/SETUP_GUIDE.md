@@ -155,10 +155,20 @@ docker ps
    ```
 
 3. **Chạy Migration Cơ sở dữ liệu (Alembic):**
-   Cập nhật cấu trúc bảng lên phiên bản mới nhất:
+   Cập nhật cấu trúc bảng lên phiên bản mới nhất từ thư mục `backend/`:
    ```bash
    alembic upgrade head
    ```
+
+   Nếu chạy từ root của repo bằng PowerShell/Conda hr-backend, chỉ rõ config:
+   ```powershell
+   & "C:\Users\huetr\miniconda3\envs\hr-backend\python.exe" -B -m alembic -c backend/alembic.ini upgrade head
+   ```
+   Không có `-c` ở root sẽ báo `No 'script_location' key found in configuration`. Config dùng đường dẫn theo vị trí `alembic.ini`; migration đọc `backend/.env` dù chạy từ root. PostgreSQL phải đang chạy và khớp cấu hình backend; `Connection refused` tại localhost:5432 nghĩa là chưa kết nối được DB, không phải thiếu migration.
+
+   Revision `f1a2b3c4d5e6` hợp nhất hai head QR/AI (`b7c9d1e2f304`, `e0f1a2b3c4d5`). Hai nhánh QR dùng `ADD COLUMN IF NOT EXISTS` để tránh thêm trùng `card_code`. Merge không sửa dữ liệu; dùng `upgrade head`, không cần stamp/downgrade/reset DB.
+
+   Với Docker chạy trong WSL, giữ một terminal WSL mở khi chạy Python trên Windows. Nếu container báo healthy nhưng Windows localhost:5432 bị từ chối, kiểm tra phiên WSL/localhost forwarding trước khi đổi credentials. Lệnh từ root `upgrade head` và `current` đã kiểm chứng trên PostgreSQL development, head là `f1a2b3c4d5e6`; SQL offline cũng sinh thành công. Không suy ra migration đã chạy trên các DB khác.
 
 4. **Nạp dữ liệu mẫu khởi tạo (Seed Data):**
    Khởi tạo sẵn các phòng ban, chức vụ, nhân viên, số dư phép năm 12 ngày và tài khoản demo:
@@ -295,6 +305,22 @@ In Anaconda Prompt, activate `conda activate hr-backend` and enter backend/. Run
 ## Kiểm tra flow AI chatbox
 
 Không thêm dependency/migration cho interpreter, preview chat hoặc upload một bước. Các bảng knowledge/version/section/draft/report/audit vẫn cần migrations đã mô tả ở trên. Restart backend và build frontend sau cập nhật. Key ở biến môi trường, không đưa vào repo. GEMINI_ENABLED=false vẫn hỗ trợ lệnh mẫu/ngày/filter phổ biến/DB/template; câu khó cần provider được cấu hình.
+
+Phân tích AI cần pandas>=2.2,<4, numpy>=1.26,<3 và matplotlib>=3.9,<4 trong chính Conda hr-backend (đã khai báo requirements.txt). `matplotlib.pyplot` là module của matplotlib, không phải package riêng. Backend render bằng Agg, không cần GUI hay seed mới; migration audit được mô tả bên dưới. Restart backend và build/reload frontend; MANAGER/HR/ADMIN tạo báo cáo từ chat rồi chọn “Phân tích & biểu đồ”, hoặc hỏi “phân tích báo cáo này”. Test tập trung: `python -B -m pytest tests/unit/test_ai_analysis_tool.py tests/unit/test_ai_report_draft.py tests/unit/test_ai_service.py -q` tại backend; `npm run build` tại frontend. Unit tests không chứng minh Gemini thật/DB thật.
+
+Phân tích cần migration audit `0a1b2c3d4e5f` (head sau merge `f1a2b3c4d5e6`): từ root chạy interpreter hr-backend với `-B -m alembic -c backend/alembic.ini upgrade head`, rồi restart backend/reload frontend. Migration giữ dữ liệu audit và thêm REPORT_ANALYSIS vào CHECK constraint; đã áp dụng trên PostgreSQL development và kiểm tra snapshot HR tạo PNG thành công. Không cần seed lại. Test thêm `tests/unit/test_report_permissions.py` và `tests/unit/test_ai_error_envelopes.py`; EMPLOYEE bị 403 ở mọi endpoint report, prompt mẫu không có report, HR/manager giữ phạm vi được cấp. Ma trận ở [AI_PROMPT_PERMISSIONS](AI_PROMPT_PERMISSIONS.md).
+
+Cập nhật biểu đồ theo nghiệp vụ không cần migration/seed/dependency mới: restart backend và bấm lại “Phân tích & biểu đồ” trên snapshot hiện có. HEADCOUNT hiển thị số người theo phòng ban/trạng thái thay vì Min/Median/Mean/Max; kiểm thử hồi quy trong `tests/unit/test_ai_analysis_tool.py` bao gồm số người, tổng nhóm còn lại, đơn vị ngày công và không gộp tiền khác currency.
+
+Kho tài liệu: restart backend/reload frontend để có xem/tải PDF lưu trữ, đổi tên, lọc người đọc và khôi phục. Khôi phục tạo version nháp từ PDF/mapping cũ, không cần upload lại; phiên bản cũ giữ lịch sử. Mở “Phiên bản PDF” → “Kiểm tra & công bố”, kiểm tên/quyền/hiệu lực/mục cho AI, mở PDF ở tab riêng rồi công bố. Tài liệu văn bản không có PDF: khôi phục về DRAFT, sửa thông tin văn bản rồi công bố theo luồng legacy. Mapping heading tự động mới chỉ áp dụng upload mới; dùng chỉnh bản nháp để sửa mapping đã có. Không seed/publish tự động.
+
+Kiểm thử luồng chính sách: sau công bố tài liệu được phép dùng, đăng nhập employee hỏi “Chính sách nghỉ phép như thế nào?” hoặc “Quy trình tạo đơn nghỉ phép là gì?”. Chat phải trả đoạn nguồn và liên kết “Xem đúng mục”, không tạo draft đơn; mở link phải đúng trang/heading và không có token trong URL. Draft/archive/hết hiệu lực/mục is_answerable=false không được RAG dùng. Unit regression: tại backend chạy `python -B -m pytest tests/unit/test_ai_api.py tests/unit/test_ai_service.py tests/unit/test_ai_analysis_tool.py tests/unit/test_ai_analysis_dispatch.py -q`; frontend `npm run build`. Build/unit không chứng minh browser hoặc Gemini thật; không tự công bố tài liệu demo để vượt kiểm tra.
+
+Cách công bố ngắn nhất cho PDF nháp: từ list bấm **Kiểm tra & công bố** → kiểm thông tin/nguồn → **Công bố vN**. Không cần mở lịch sử phiên bản trước. Với tài liệu đã công bố và có draft thay thế, dùng menu “Kiểm tra phiên bản nháp mới”.
+
+Trả lời chính sách động: bật GEMINI_ENABLED/key/model ở backend; GEMINI_POLICY_TIMEOUT_SECONDS mặc định 15, cho phép 5–30 giây, riêng với intent và adapter ngày/filter. Provider lỗi vẫn trả excerpt ngắn kèm nguồn. Từ backend chạy `python -B scripts/check_ai_policy_prompts.py` để kiểm Gemini thật với hai chính sách giả lập, không dùng DB hoặc in secret; đã kiểm trả GEMINI/citation cả hai. Script dùng quota provider, kết quả không bảo đảm uptime/quota tương lai. Unit `test_ai_policy_answer.py` kiểm diễn giải động, nguồn giả, evidence giả, số liệu bịa và fallback không dán cover PDF. Khi test chỉ kiểm handler/RAG, tắt Gemini trong fixture hoặc mock provider rõ ràng để không phụ thuộc key thật từ .env. Nội dung PDF demo còn chữ dự thảo thì câu trả lời phải nói rõ chưa được xác nhận, không khẳng định số liệu minh họa là chính sách có hiệu lực.
+
+Gemini nhận intent dùng `GEMINI_INTENT_TIMEOUT_SECONDS=15` mặc định (cho phép 5–30), response JSON/schema enum và 512 token. Adapter ngày/filter báo cáo/policy vẫn 5s. Dùng `python -B scripts/check_ai_analysis_prompts.py` tại backend để kiểm tra 4 intent với Gemini thật khi GEMINI_ENABLED=true và cấu hình key/model hợp lệ. Script gửi prompt giả lập, không đọc DB và chỉ in intent/loại lỗi; các lời gọi dùng quota của provider. SDK google.generativeai đã ngừng hỗ trợ theo cảnh báo runtime; chưa chuyển SDK trong thay đổi này.
 
 Trên DB development/test đã xác định:
 1. EMPLOYEE hỏi số dư phép, so với DB; mở citation published phù hợp nếu có. DRAFT/ARCHIVED hoặc trái quyền không xuất hiện.

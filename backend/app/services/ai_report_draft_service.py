@@ -63,6 +63,7 @@ class AIReportDraftService:
 
     @staticmethod
     async def start(db, user, message, today, initial=None):
+        AIReportDraftService.validate_access(user, {})
         params = {**await interpret_report_prompt(message, today, user, initial),
                   **report_answers(message, today, initial), **(initial or {})}
         if params.get("kind") == "HEADCOUNT":
@@ -76,6 +77,7 @@ class AIReportDraftService:
 
     @staticmethod
     async def continue_draft(db, user, draft, message, today, inputs=None):
+        AIReportDraftService.validate_access(user, {})
         answers = {**await interpret_report_prompt(message, today, user, draft.typed_params),
                    **report_answers(message, today, draft.typed_params, draft.missing_fields)}
         if inputs:
@@ -90,6 +92,7 @@ class AIReportDraftService:
 
     @staticmethod
     async def revise_run(db, user, run_id, message, today):
+        AIReportDraftService.validate_access(user, {})
         run = await db.scalar(select(ReportRun).where(
             ReportRun.run_id == run_id, ReportRun.owner_user_account_id == user.user_account_id))
         if run is None:
@@ -110,6 +113,7 @@ class AIReportDraftService:
 
     @staticmethod
     async def finish_or_ask(db, user, draft):
+        AIReportDraftService.validate_access(user, draft.typed_params)
         if draft.missing_fields:
             field = draft.missing_fields[0]
             definitions = report_catalog(user)["reports"]

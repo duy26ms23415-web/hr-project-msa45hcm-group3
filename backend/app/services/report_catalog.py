@@ -32,6 +32,8 @@ def report_catalog(user):
     employee = user.employee_id is not None
     privileged = bool(roles & {"HR", "ADMIN"})
     reviewer = bool(roles & {"MANAGER", "HR", "ADMIN"})
+    if not reviewer:
+        return {"catalog_version": "v1", "reports": []}
     common_scopes = (["SELF"] if employee else []) + (["DIRECT_REPORTS"] if reviewer and employee else []) + (["COMPANY"] if privileged else [])
     items = []
     for kind, label in REPORT_NAMES.items():

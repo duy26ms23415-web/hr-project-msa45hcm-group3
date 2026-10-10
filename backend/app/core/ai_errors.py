@@ -10,6 +10,9 @@ from fastapi.exception_handlers import http_exception_handler, request_validatio
 from app.services.ai_request_security import request_context
 
 MESSAGES = {
+    "ANALYSIS_DEPENDENCIES_UNAVAILABLE": "Máy chủ chưa có đủ thư viện phân tích. Vui lòng liên hệ quản trị viên hệ thống.",
+    "ANALYSIS_ROW_LIMIT": "Báo cáo vượt giới hạn 10.000 dòng để phân tích. Vui lòng thu hẹp kỳ hoặc bộ lọc.",
+    "ANALYSIS_VALUE_OUT_OF_RANGE": "Dữ liệu báo cáo vượt phạm vi tạo biểu đồ. Vui lòng liên hệ HR để kiểm tra dữ liệu.",
     "PDF_SIZE_INVALID": "PDF phải có dung lượng từ 1 byte đến 10 MiB.",
     "PDF_MIME_INVALID": "Nội dung file không phải PDF. Đổi đuôi file sang .pdf không chuyển đổi định dạng.",
     "PDF_INVALID": "Không đọc được PDF. Hãy xuất lại file PDF và thử lại.",
@@ -69,6 +72,8 @@ def install_ai_errors(app, prefixes):
             code = "REPORT_UNAVAILABLE" if "/reports" in request.url.path else "DOCUMENT_UNAVAILABLE" if "/knowledge" in request.url.path else "PERMISSION_DENIED"
         elif raw == "PAYROLL_CURRENCY_UNAVAILABLE":
             code = raw
+        elif raw in MESSAGES and raw.startswith("ANALYSIS_") and status in {422, 503}:
+            code = raw
         elif status == 422 and raw in MESSAGES and raw.startswith("PDF_"):
             code = raw
         elif status == 410:
@@ -88,7 +93,7 @@ def install_ai_errors(app, prefixes):
         request_id = getattr(request.state, "ai_request_id", None) or uuid4().hex
         safe_headers.update({"X-Request-ID": request_id, "Cache-Control": "private, no-store"})
         # Keep a bounded legacy code for existing clients; never return validation inputs/exception text.
-        legacy = raw if raw and raw.startswith(("AI_", "PDF_", "REPORT_", "PERMISSION_", "DATA_")) else code
+        legacy = raw if raw and raw.startswith(("AI_", "PDF_", "REPORT_", "PERMISSION_", "DATA_", "ANALYSIS_")) else code
         return JSONResponse({"detail": legacy, "code": code, "message_code": code, "message": message, "reply": message, "status": "DENIED" if status in {401, 403} else "UNAVAILABLE" if status >= 500 else "OUT_OF_SCOPE", "action": None, "sources": [], "request_id": request_id}, status_code=status, headers=safe_headers)
 
     async def http_error(request, exc):

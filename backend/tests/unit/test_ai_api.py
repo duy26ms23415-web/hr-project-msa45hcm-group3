@@ -11,6 +11,113 @@ from app.api.v1.endpoints import ai, attendance, knowledge, leaves, reports
 from app.schemas.ai import AIChatResponse
 
 
+@pytest.mark.parametrize("role,preview,minimum_role,expected", [
+    ("EMPLOYEE", False, "EMPLOYEE", False), ("EMPLOYEE", True, "EMPLOYEE", False),
+    ("MANAGER", True, "EMPLOYEE", False), ("HR", False, "EMPLOYEE", False),
+    ("HR", True, "EMPLOYEE", True), ("HR", True, "ADMIN", False),
+    ("ADMIN", True, "ADMIN", True),
+])
+def test_archived_pdf_preview_is_editor_only_and_retains_role_limits(role, preview, minimum_role, expected):
+    user = SimpleNamespace(role_assignments=[SimpleNamespace(role=SimpleNamespace(role_code=role))])
+    document = SimpleNamespace(status="ARCHIVED", minimum_role=minimum_role)
+    version = SimpleNamespace(document_id=1, status="ARCHIVED", minimum_role=minimum_role)
+    assert knowledge._version_readable(user, document, version, 1, preview) is expected
+    assert knowledge._version_readable(user, document, version, 2, preview) is False
+
+
+def test_automatic_pdf_sections_use_numbered_headings_for_precise_links():
+    page = "HR POLICY LIBRARY\n1. Đối tượng áp dụng\nNội dung\n2. Quy trình xin nghỉ phép\nNội dung phép năm"
+    sections = knowledge._automatic_sections([page])
+    assert [section.heading for section in sections] == ["1. Đối tượng áp dụng", "2. Quy trình xin nghỉ phép"]
+    assert [section.section_code for section in sections] == ["PAGE_1_SECTION_1", "PAGE_1_SECTION_2"]
+    assert len(knowledge._validate_sections(sections, [page])) == 2
+
+
+@pytest.mark.asyncio
+async def test_archived_pdf_download_rechecks_role_and_preserves_hash(api_context, monkeypatch, tmp_path):
+    import hashlib
+    app, user, db = api_context
+    content = b'%PDF-1.4\nlocal test'
+    path = tmp_path / 'fixture.pdf'
+    path.write_bytes(content)
+    document = SimpleNamespace(status="ARCHIVED", minimum_role="EMPLOYEE")
+    version = SimpleNamespace(document_id=1, status="ARCHIVED", minimum_role="EMPLOYEE", storage_key="fixture.pdf", sha256=hashlib.sha256(content).hexdigest(), title="Policy")
+    db.get.side_effect = lambda model, key: document if key == 1 else version
+    monkeypatch.setattr(knowledge, "resolve_storage_path", lambda key: path)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        url = '/ai/knowledge/1/versions/2/file'
+        assert (await client.get(url, params={"preview": True, "download": True})).status_code == 404
+        user.role_assignments[0].role.role_code = "HR"
+        assert (await client.get(url)).status_code == 404
+        response = await client.get(url, params={"preview": True, "download": True})
+        assert response.status_code == 200 and response.content == content
+        assert response.headers['content-disposition'] == 'attachment; filename="Policy.pdf"'
+        assert response.headers['cache-control'] == 'private, no-store'
+        version.sha256 = 'incorrect'
+        assert (await client.get(url, params={"preview": True})).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_restore_archived_document_to_draft_without_republishing_versions(api_context):
+    app, user, db = api_context
+    user.role_assignments[0].role.role_code = "HR"
+    document = SimpleNamespace(document_id=1, document_code="HR-POL-001", current_version_id=2, title="Policy", content="Body",
+                               source_url=None, status="ARCHIVED", minimum_role="EMPLOYEE", updated_at=datetime.now(timezone.utc))
+    db.scalar.side_effect = [document, None, document]
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post('/ai/knowledge/1/restore')
+        assert response.status_code == 200
+        assert response.json()["status"] == "DRAFT" and response.json()["current_version_id"] is None
+        assert (await client.post('/ai/knowledge/1/restore')).status_code == 409
+    db.scalars.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_restore_pdf_creates_new_draft_with_same_file_and_sections(api_context):
+    from app.models.knowledge import KnowledgeDocumentVersion, KnowledgeSection
+    app, user, db = api_context
+    user.role_assignments[0].role.role_code = "HR"
+    document = SimpleNamespace(document_id=1, current_version_id=2, title="Policy", content="Body", source_url=None,
+                               status="ARCHIVED", minimum_role="EMPLOYEE", updated_at=datetime.now(timezone.utc))
+    source = SimpleNamespace(version_id=2, minimum_role="EMPLOYEE", status="ARCHIVED", storage_key="original.pdf", sha256="hash",
+                             byte_size=20, page_count=2, mime_type="application/pdf", effective_from=None, effective_to=None)
+    section = SimpleNamespace(section_code="LEAVE", heading="Nghỉ phép", page_start=1, page_end=2, anchor="Nghỉ phép", content="Body", is_answerable=True)
+    db.scalar.side_effect = [document, source, 3]
+    db.scalars.side_effect = [SimpleNamespace(all=lambda: [section]), SimpleNamespace(all=lambda: [source])]
+    def add(value):
+        if isinstance(value, KnowledgeDocumentVersion):
+            value.version_id = 4
+    db.add = Mock(side_effect=add)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post('/ai/knowledge/1/restore')
+        assert response.status_code == 200 and response.json()['status'] == 'DRAFT'
+    added = [call.args[0] for call in db.add.call_args_list]
+    draft = next(value for value in added if isinstance(value, KnowledgeDocumentVersion))
+    copied = next(value for value in added if isinstance(value, KnowledgeSection))
+    assert draft.version_number == 4 and draft.status == 'DRAFT'
+    assert draft.storage_key == 'original.pdf' and draft.sha256 == 'hash'
+    assert copied.version_id == 4 and copied.heading == 'Nghỉ phép' and copied.content == 'Body'
+    assert source.status == 'ARCHIVED' and document.current_version_id is None
+
+
+@pytest.mark.asyncio
+async def test_document_rename_preserves_content_and_version_and_cannot_widen_role(api_context):
+    app, user, db = api_context
+    user.role_assignments[0].role.role_code = "HR"
+    document = SimpleNamespace(document_id=1, current_version_id=2, title="HR-POL-001", content="Body",
+                               source_url=None, status="PUBLISHED", minimum_role="EMPLOYEE", updated_at=datetime.now(timezone.utc))
+    db.scalar.return_value = document
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        assert (await client.patch('/ai/knowledge/1/title', json={"title": "  Chính sách nghỉ phép  "})).status_code == 200
+        assert document.title == "Chính sách nghỉ phép" and document.current_version_id == 2 and document.content == "Body"
+        assert (await client.patch('/ai/knowledge/1/title', json={"title": "Name", "minimum_role": "ADMIN"})).status_code == 422
+        document.minimum_role = "ADMIN"
+        assert (await client.patch('/ai/knowledge/1/title', json={"title": "Name"})).status_code == 404
+        user.role_assignments[0].role.role_code = "EMPLOYEE"
+        assert (await client.post('/ai/knowledge/1/restore')).status_code == 403
+        assert (await client.patch('/ai/knowledge/1/title', json={"title": "Name"})).status_code == 403
+
+
 @pytest.fixture
 def api_context(monkeypatch):
     from app.services import ai_request_security
@@ -54,9 +161,8 @@ async def test_suggestion_actions_reference_the_relevant_published_section(api_c
     assert response.status_code == 200
     entries = {item["suggestion_id"]: item for item in response.json()}
     assert entries["draft_leave"]["source"]["section_code"] == "LEAVE.REQUEST"
-    assert entries["my_payslip"]["source"]["section_code"] == "REPORT.CATALOG"
-    assert entries["my_attendance_report"]["default_inputs"]["scope"] == "SELF"
-    assert entries["my_attendance_report"]["default_inputs"]["kind"] == "ATTENDANCE"
+    assert "my_payslip" not in entries
+    assert "my_attendance_report" not in entries
     assert "tham khảo mục LEAVE.REQUEST" in entries["draft_leave"]["prompt"]
     assert "payroll_summary" not in entries
     for call in db.execute.call_args_list:
@@ -69,10 +175,13 @@ async def test_report_catalog_filters_role_and_matches_shipped_columns(api_conte
     app, user, db = api_context
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.get('/reports/catalog')
+        assert response.status_code == 403
+        user.role_assignments[0].role.role_code = "MANAGER"
+        response = await client.get('/reports/catalog')
         assert response.status_code == 200
         assert response.headers["cache-control"] == "private, no-store"
         entries = {item["kind"]: item for item in response.json()["reports"]}
-        assert set(entries) == {"ATTENDANCE", "LEAVE", "ATTENDANCE_FIX", "MY_PAYSLIP"}
+        assert set(entries) == {"ATTENDANCE", "LEAVE", "ATTENDANCE_FIX", "MY_PAYSLIP", "HEADCOUNT", "APPROVAL_QUEUE"}
         assert entries["MY_PAYSLIP"]["scopes"] == ["SELF"]
         assert entries["ATTENDANCE"]["columns"][0] == "Mã nhân viên"
         user.role_assignments[0].role.role_code = "HR"
@@ -82,7 +191,8 @@ async def test_report_catalog_filters_role_and_matches_shipped_columns(api_conte
 
 @pytest.mark.asyncio
 async def test_report_history_cursor_remains_owner_scoped_and_includes_expired(api_context):
-    app, _, db = api_context
+    app, user, db = api_context
+    user.role_assignments[0].role.role_code = "MANAGER"
     from datetime import timedelta
     now = datetime.now(timezone.utc)
     runs = [SimpleNamespace(run_id=char * 32, kind="ATTENDANCE", scope="SELF", status="EXPIRED", row_count=2, template_version="attendance_v1", as_of=now, created_at=now, expires_at=now - timedelta(hours=1)) for char in ("f", "e", "d")]
@@ -225,10 +335,11 @@ async def test_chat_identity_and_roles_ignore_client_claims(api_context, monkeyp
 
 @pytest.mark.asyncio
 async def test_report_json_and_csv_apply_same_scope(api_context):
-    app, _, db = api_context
+    app, user, db = api_context
+    user.role_assignments[0].role.role_code = "MANAGER"
     db.execute.return_value = SimpleNamespace(mappings=lambda: SimpleNamespace(all=lambda: []))
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        params = {"kind": "ATTENDANCE", "start_date": "2026-10-01", "end_date": "2026-10-05", "department_id": 3}
+        params = {"kind": "ATTENDANCE", "start_date": "2026-10-01", "end_date": "2026-10-05", "department_id": 3, "scope": "SELF"}
         assert (await client.get('/reports', params=params)).status_code == 200
         assert (await client.get('/reports', params={**params, "output": "csv"})).status_code == 200
         for call in db.execute.call_args_list:

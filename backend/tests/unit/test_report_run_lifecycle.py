@@ -14,7 +14,7 @@ from app.services.report_service import ReportService
 @pytest.mark.parametrize("failure", [None, "storage", "empty_scope"])
 async def test_run_freezes_scope_and_persists_terminal_state(monkeypatch, failure):
     events = []
-    actor = SimpleNamespace(user_account_id=9, login_email="owner@example.test")
+    actor = SimpleNamespace(user_account_id=9, login_email="owner@example.test", role_assignments=[SimpleNamespace(role=SimpleNamespace(role_code="MANAGER"))])
     req = ReportRunCreate(kind="ATTENDANCE", start_date=date(2026, 10, 1), end_date=date(2026, 10, 31))
     ids = [] if failure == "empty_scope" else [7]
     monkeypatch.setattr(ReportService, "visible_employee_ids", AsyncMock(return_value=("SELF", ids)))

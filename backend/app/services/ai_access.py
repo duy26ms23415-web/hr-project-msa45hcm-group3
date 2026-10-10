@@ -34,7 +34,7 @@ def allowed_knowledge_roles(roles: set[str]) -> list[str]:
 def report_scope(user, requested_scope: str | None = None) -> str:
     """Resolve and authorize a report scope using roles from the authenticated user."""
     roles = user_roles(user)
-    require_known_role(roles)
+    require_reviewer_role(roles)
 
     if roles & {"ADMIN", "HR"}:
         allowed = {"SELF", "DIRECT_REPORTS", "COMPANY"}

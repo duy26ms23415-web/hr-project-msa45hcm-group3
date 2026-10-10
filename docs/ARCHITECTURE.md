@@ -535,10 +535,24 @@ sequenceDiagram
 
 ### QR schema alignment for seed
 
+Alembic config neo `script_location` và `prepend_sys_path` vào `%(here)s`; `env.py` tạo Settings với đường dẫn tuyệt đối tới `backend/.env`, giữ ưu tiên biến môi trường của Pydantic. Vì vậy cùng config dùng được từ backend hoặc root (`-c backend/alembic.ini`), tránh nạp nhầm env theo working directory. Riêng thay đổi cấu hình không thay schema.
+
+Merge revision `f1a2b3c4d5e6` có hai parent `b7c9d1e2f304` và `e0f1a2b3c4d5`, đưa graph về một head. Nhánh QR cuối AI dùng `ADD COLUMN IF NOT EXISTS` vì nhánh QR từ initial có thể đã thêm cột. Merge upgrade/downgrade không phát sinh DDL; không thay parent lịch sử hoặc stamp bỏ qua migration.
+
 Migration `e0f1a2b3c4d5` follows `d9e0f1a2b3c4` and adds `hr_qr_cards.card_code VARCHAR(255) NULL` to match the existing QRCard model, without backfilling old cards. Seed uses one transaction: a QR query failure rolls back new accounts as well. This migration only aligns the schema; QR authentication behavior is unchanged.
 
 
 ## Kiến trúc AI chatbox và công cụ
+
+Policy báo cáo: chỉ MANAGER/HR/ADMIN; EMPLOYEE không có capability báo cáo dù SELF. Suggestion registry, fallback UI, report catalog, router reports, scope/generate/visible IDs, snapshot và nháp báo cáo đồng bộ guard. Quyền nhiều role lấy từ DB; Gemini không quyết định quyền. JSON/CSV/XLSX/history/run cũ đều áp cùng guard. Ma trận: [AI_PROMPT_PERMISSIONS](AI_PROMPT_PERMISSIONS.md).
+
+Revision `0a1b2c3d4e5f` sau merge QR/AI mở rộng ck_ai_request_event_action với REPORT_ANALYSIS, giữ nguyên audit cũ. Model và allowlist service phải khớp constraint; thiếu action trong DB gây lỗi sau khi render và bị quy về DATA_SERVICE_UNAVAILABLE. Phân tích có các mã ANALYSIS_* trong error envelope; frontend dùng aiErrorMessage. Downgrade về allowlist cũ bị PostgreSQL từ chối nếu còn audit phân tích; không xóa lịch sử để downgrade.
+
+Công cụ `ai_analysis_tool.analyze_report` nhận snapshot đã kiểm quyền, dùng pandas cho bảng/tần suất, NumPy kiểm giá trị hữu hạn và Matplotlib Agg tạo PNG trong bộ nhớ. Router `/reports/runs/{run_id}/analysis` tái kiểm owner/TTL/scope snapshot, audit và chạy tính toán ở thread pool; không ghi chart công khai. Chat điều phối phân tích khi có report_run_id; Gemini chỉ phân loại ANALYZE_REPORT hoặc diễn giải filter theo contract kín, không nhận DB rows và không chạy mã. Thống kê tiền giữ Decimal, ảnh mới dùng float; bỏ thống kê tiền nếu snapshot có nhiều currency. Cần migration audit 0a1b2c3d4e5f.
+
+`AIAnalysisTool.execute` là entrypoint chung cho chat/API; `report_access.authorized_run` dùng chung cho preview/download/analysis. Nhận intent Gemini gửi response_schema enum + application/json, ngân sách 512 token, timeout riêng GEMINI_INTENT_TIMEOUT_SECONDS (mặc định 15s, 5–30s), không retry. Các adapter date/report/policy giữ timeout 5s. SDK google.generativeai hiện báo đã ngừng hỗ trợ; chuyển SDK là phần việc riêng, không tự cài dependency khác.
+
+`_chart_data` chọn chiều dữ liệu theo kind và trả metadata `chart_data` cùng PNG: HEADCOUNT nhóm phòng ban/trạng thái, cộng employee_count thay vì đếm dòng; ATTENDANCE chỉ so sánh ngày công, không trộn phút; LEAVE chỉ so sánh ngày; payroll giữ đơn vị currency và Decimal đến lúc render. Thanh ngang nhân sự xếp chồng trạng thái; payroll so sánh GROSS/net theo phòng ban. Giới hạn 20 nhóm phòng ban bằng nhóm phần còn lại có tổng bảo toàn. Thống kê min/median/mean/max vẫn ở bảng, không dùng làm danh mục biểu đồ.
 
 Giữ convention Router → Service/ORM → Model của dự án, không thêm Repository/framework agent. AIService là Facade điều phối, provider là Adapter, công cụ là service một trách nhiệm. Protocol interpreter cho phép thay adapter mà không đổi nghiệp vụ; không cần hệ phân cấp kế thừa cho các hành động khác nhau.
 
@@ -563,8 +577,16 @@ Ngày/bộ lọc phổ biến xử lý tại Python. Date fallback gửi tối �
 
 Chỉnh báo cáo gửi report_run_id; backend đọc filters đã lưu theo owner, không tin filter cũ do client tự khai. Run phải READY/còn hạn. Filter mới kiểm quyền/kỳ lại rồi tạo run mới; preview/download kiểm quyền hiện tại và scope snapshot. Chỉnh giới hạn trong filter/template sẵn có, không sửa công thức lương.
 
-Upload một bước POST /api/v1/ai/knowledge/upload: HR/Admin, validate PDF trước ghi, tạo document DRAFT + version đầu + section mỗi trang có text. Tải version mới không thay bản published cho tới khi công bố. Quyền mặc định EMPLOYEE, tùy chọn thu hẹp; HR không nâng tới ADMIN. File private/hash, kiểm active content gồm AA/Next. Không thêm migration cho flow này.
+Upload một bước POST /api/v1/ai/knowledge/upload: HR/Admin, validate PDF trước ghi, tạo document DRAFT + version đầu. Mapping tự động dùng heading đánh số/Điều trong trang; không có heading thì một section mỗi trang có text, vượt 200 heading thì fallback theo trang. Tải version mới không thay bản published cho tới khi công bố. Quyền mặc định EMPLOYEE, tùy chọn thu hẹp; HR không nâng tới ADMIN. File private/hash, kiểm active content gồm AA/Next. Không thêm migration cho flow này.
 
 KnowledgePage quản lý hàng đợi nhiều file với trạng thái pending/uploading/done/error. Mỗi file gọi endpoint upload hiện có tuần tự, độc lập; lỗi một file không hủy các file đã lưu. Thử lại chỉ xử lý pending/error. API client nhận FormData sẽ tắt header Content-Type thủ công, để browser tạo multipart boundary thay cho mặc định JSON. Không thêm endpoint bulk/transaction chung; upload version vẫn một file. Error envelope chỉ ánh xạ mã lỗi PDF trong whitelist sang thông báo cụ thể, không trả exception hoặc nội dung file.
+
+Kho có title/current_version_id/document_code trong KnowledgeRead. PATCH title chỉ đổi nhãn danh sách, không sửa version/content/quyền. POST restore khóa document ARCHIVED, chọn PDF đọc được (ưu tiên version hiện hành trước đây), tạo version_number mới + section mới dùng cùng storage/hash; các version lịch sử chuyển/giữ ARCHIVED, document DRAFT/current_version_id null. Không tạo nguồn RAG cho tới publish; không chép file private sang public. Archive áp dụng mọi version kể cả document chưa có current_version_id. preview=true cho phép HR/ADMIN đọc cả draft/archive, vẫn kiểm mức quyền document/version; preview=false không cho nguồn archive. File hỗ trợ download=true, tên có title đã bỏ ký tự nguy hiểm, private/no-store và hash bắt buộc.
+
+UI công bố dùng review modal với quyền/hiệu lực/mapping/is_answerable; PDF tab riêng giữ ngữ cảnh kiểm tra. Viewer toàn tài liệu khi không có section, chuyển từng trang bằng thanh sticky; liên kết citation có section giữ đúng vùng trang và highlight heading. AIService ưu tiên policy marker trước draft/report không tường minh; report tường minh vẫn kiểm quyền. RAG cộng điểm heading sau ngưỡng content, chỉ lấy excerpt tốt nhất mỗi section. Chat hiển thị liên kết route thật tới đúng version/section, không truyền JWT qua URL. Không thêm dependency/migration cho UX và routing này.
+
+Nút review trên list chọn PDF version DRAFT mới nhất trong danh sách đã lọc quyền, tải sections preview và mở trực tiếp review modal; không tự publish. Nếu chưa có draft thì mở upload, legacy text dùng form cũ. Intent mở quản lý tài liệu vẫn ưu tiên OPEN_KNOWLEDGE, không bị policy marker “nội quy” lấy mất.
+
+Hỏi đáp chính sách dùng `AIGroundedAnswer.statements` (tối đa 3), mỗi ý gồm source/text/evidence: Gemini viết text tự nhiên từ nguồn, backend kiểm schema, source index, evidence nguyên văn và không có số liệu ngoài evidence bằng `ai_policy_answer.grounded_reply`. Đây là validation dẫn chứng/định lượng, không phải semantic verifier hoàn chỉnh. Prompt giữ điều kiện/ngoại lệ và cấm biến ví dụ thành quy định. `needs_draft_notice` kiểm nội dung nguồn liên quan còn ghi dự thảo/chưa xác nhận kể cả trạng thái DB đã PUBLISHED. Provider JSON/schema, 1536 output tokens, timeout GEMINI_POLICY_TIMEOUT_SECONDS mặc định 15s (5–30), không retry. Fallback chung chọn tối đa 3 câu hoàn chỉnh theo truy vấn và heading, không có câu trả lời hardcode theo chủ đề; không có câu phù hợp thì chỉ mở nguồn. Không gửi HR rows/account/history sang provider policy; follow-up chỉ dùng câu hỏi user liên quan đã làm mờ thông tin nhạy cảm.
 
 Nhận dạng số dư dùng chung is_leave_balance_query cho tra cứu và hỏi xen trong draft; alias ngày nghỉ/ngày phép giữ nguyên guard danh tính JWT, không thay thế câu hỏi policy/report. Parser báo cáo xử lý tháng sau/tháng tới tại Python theo today HCM, monthrange giữ đúng giao năm/năm nhuận; adapter không gọi provider nếu kỳ đã xác định. Reply định dạng ngày DD/MM/YYYY và scope tiếng Việt, action vẫn giữ contract ISO/enum.

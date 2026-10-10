@@ -11,14 +11,65 @@ from app.services.leave_service import LeaveService
 from app.services.attendance_service import AttendanceService
 
 
+def test_retrieval_prefers_matching_heading_and_links_each_section_once():
+    from app.services.knowledge_retrieval import retrieve
+    content = "Quy trình xin nghỉ phép năm được quy định trong tài liệu này. " * 40
+    documents = [{"document_id": 1, "version_id": 2, "section_id": index, "title": "HR", "status": "PUBLISHED",
+                  "heading": heading, "content": content} for index, heading in [(3, "Đối tượng áp dụng"), (4, "Quy trình xin nghỉ phép")]]
+    passages = retrieve("Quy trình xin nghỉ phép", documents)
+    assert passages[0].section_id == 4
+    assert len(passages) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("question", [
+    "Chính sách xin nghỉ phép như thế nào?",
+    "Quy trình tạo đơn nghỉ phép là gì?",
+    "Phân tích chính sách nghỉ phép",
+    "Hướng dẫn tạo đơn nghỉ phép",
+    "Cách xin nghỉ phép",
+])
+async def test_policy_questions_answer_from_pdf_and_link_section_without_creating_draft(monkeypatch, question):
+    from app.services.ai_draft_service import AIDraftService
+    monkeypatch.setattr("app.services.ai_service.settings.GEMINI_ENABLED", False)
+    db = AsyncMock()
+    db.execute.return_value = SimpleNamespace(mappings=lambda: SimpleNamespace(all=lambda: [{
+        "document_id": 3, "title": "Chính sách nghỉ phép", "status": "PUBLISHED",
+        "content": "Chính sách nghỉ phép: quy trình xin nghỉ và tạo đơn nghỉ phép được hướng dẫn tại mục này.",
+        "version_id": 5, "section_id": 8, "section_code": "LEAVE_REQUEST",
+        "heading": "Quy trình xin nghỉ phép", "page_start": 2, "page_end": 3, "is_answerable": True,
+    }]))
+    draft = AsyncMock(side_effect=AssertionError("Policy questions must not create drafts"))
+    personal = AsyncMock(side_effect=AssertionError("Policy questions must not read personal data"))
+    monkeypatch.setattr(AIDraftService, "create_draft", draft)
+    monkeypatch.setattr(AIService, "get_employee_context", personal)
+    result = await AIService.process_chat(db, 7, AIChatRequest(message=question), {"EMPLOYEE"}, owner_user_account_id=9)
+    assert result.action is None and result.draft_id is None
+    assert result.answer_mode == "RAG"
+    assert "quy trình xin nghỉ" in result.reply
+    assert result.sources[0].viewer_path == "/knowledge/view/3?version=5&section=8"
+    draft.assert_not_awaited()
+    personal.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_knowledge_management_suggestion_still_opens_editor_without_retrieval():
+    db = AsyncMock()
+    result = await AIService.process_chat(db, None, AIChatRequest(message="Mở tài liệu", suggestion_id="knowledge_admin"), {"HR"})
+    assert result.action.action_type == "OPEN_KNOWLEDGE"
+    db.execute.assert_not_awaited()
+
+
 def user(role):
     return SimpleNamespace(employee_id=7, role_assignments=[SimpleNamespace(role=SimpleNamespace(role_code=role))])
 
 
 def test_report_scope():
-    employee = str(employee_scope(user("EMPLOYEE")).compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}))
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException) as denied:
+        employee_scope(user("EMPLOYEE"))
+    assert denied.value.status_code == 403
     manager = str(employee_scope(user("MANAGER")).compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}))
-    assert "employee_id = 7" in employee and "manager_employee_id" not in employee
     assert "manager_employee_id = 7" in manager and " OR " not in manager
     assert "employee_id = 7" in str(employee_scope(user("MANAGER"), "SELF").compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}))
     assert employee_scope(user("HR"), "COMPANY") is None
@@ -277,9 +328,15 @@ async def test_unknown_role_is_rejected_before_any_database_query():
 @pytest.mark.parametrize("message", ["Tôi còn bao nhiêu phép của Nguyễn An?", "Xem công E3", "Tạo báo cáo toàn công ty"])
 async def test_foreign_or_company_requests_are_denied_before_lookup(message, context):
     db = AsyncMock()
-    result = await AIService.process_chat(db, 7, AIChatRequest(message=message), {"EMPLOYEE"})
-    assert result.action is None
-    assert "Bạn không có quyền" in result.reply
+    if "báo cáo" in message:
+        from fastapi import HTTPException
+        with pytest.raises(HTTPException) as denied:
+            await AIService.process_chat(db, 7, AIChatRequest(message=message), {"EMPLOYEE"})
+        assert denied.value.status_code == 403
+    else:
+        result = await AIService.process_chat(db, 7, AIChatRequest(message=message), {"EMPLOYEE"})
+        assert result.action is None
+        assert "Bạn không có quyền" in result.reply
     db.execute.assert_not_called()
     AIService.get_employee_context.assert_not_awaited()
 
@@ -289,13 +346,13 @@ async def test_chat_report_fallback_returns_the_actual_created_run(context, monk
     from app.services.report_run_service import ReportRunService
     from app.services.ai_draft_service import AIDraftService
     from unittest.mock import Mock
-    account = SimpleNamespace(user_account_id=9, employee_id=7, role_assignments=user("EMPLOYEE").role_assignments)
+    account = SimpleNamespace(user_account_id=9, employee_id=7, role_assignments=user("MANAGER").role_assignments)
     create = AsyncMock(return_value={"run": SimpleNamespace(run_id="a" * 32)})
     monkeypatch.setattr(ReportRunService, "create", create)
     monkeypatch.setattr(AIDraftService, "mark_ready", AsyncMock())
     db = AsyncMock()
     db.add = Mock()
-    result = await AIService.process_chat(db, 7, AIChatRequest(message="Tạo báo cáo công của tôi tháng này"), {"EMPLOYEE"}, owner_user_account_id=9, authenticated_user=account)
+    result = await AIService.process_chat(db, 7, AIChatRequest(message="Tạo báo cáo công của tôi tháng này"), {"MANAGER"}, owner_user_account_id=9, authenticated_user=account)
     assert result.action.data["run_id"] == "a" * 32
     assert create.await_args.args[1] is account
     assert create.await_args.args[2].scope == "SELF"
@@ -312,9 +369,10 @@ async def test_free_prompt_does_not_load_personal_context(context):
 
 @pytest.mark.asyncio
 async def test_headcount_chat_shortcut_is_denied_for_employee(context):
-    result = await AIService.process_chat(None, 7, AIChatRequest(message="Mở thống kê headcount hiện tại"), {"EMPLOYEE"})
-    assert result.action is None
-    assert result.reply == "Bạn không có quyền thực hiện yêu cầu này hoặc truy cập dữ liệu được yêu cầu. Vui lòng chọn chức năng trong phạm vi quyền của bạn."
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException) as denied:
+        await AIService.process_chat(None, 7, AIChatRequest(message="Mở thống kê headcount hiện tại"), {"EMPLOYEE"})
+    assert denied.value.status_code == 403
 
 
 @pytest.mark.asyncio
@@ -351,11 +409,11 @@ async def test_gemini_timeout_and_ungrounded_output_fall_back(context, monkeypat
     assert result.answer_mode == "RAG" and result.sources[0].document_id == 1
     assert model.generate_content_async.call_count == 1
     assert model.generate_content_async.call_args.kwargs["request_options"]["retry"] is None
-    assert model.generate_content_async.call_args.kwargs["generation_config"]["max_output_tokens"] == 384
+    assert model.generate_content_async.call_args.kwargs["generation_config"]["max_output_tokens"] == 1536
     provider_prompt = model.generate_content_async.call_args.args[0]
     assert '"personal_context"' not in provider_prompt
     assert "private history" not in provider_prompt and "12345" not in provider_prompt
-    model.generate_content_async = AsyncMock(return_value=SimpleNamespace(text='{"quotes":[{"source":1,"text":"ngoài kiến thức"}]}'))
+    model.generate_content_async = AsyncMock(return_value=SimpleNamespace(text='{"statements":[{"source":1,"text":"ngoài kiến thức","evidence":"Không nằm trong nguồn"}]}'))
     result = await AIService.process_chat(db, 7, request, {"EMPLOYEE"}, owner_user_account_id=7)
     assert result.answer_mode == "RAG" and "ngoài kiến thức" not in result.reply
 
@@ -373,7 +431,11 @@ async def test_free_intent_classifier_uses_closed_schema_and_redacts_personal_fi
     assert result == "DRAFT_LEAVE"
     assert model.generate_content_async.call_count == 1
     assert model.generate_content_async.call_args.kwargs["request_options"]["retry"] is None
-    assert model.generate_content_async.call_args.kwargs["generation_config"]["max_output_tokens"] == 128
+    assert model.generate_content_async.call_args.kwargs["generation_config"]["max_output_tokens"] == 512
+    schema = model.generate_content_async.call_args.kwargs["generation_config"]["response_schema"]
+    assert schema["required"] == ["intent"]
+    assert "ANALYZE_REPORT" in schema["properties"]["intent"]["enum"]
+    assert model.generate_content_async.call_args.kwargs["request_options"]["timeout"] == module.settings.GEMINI_INTENT_TIMEOUT_SECONDS
     payload = model.generate_content_async.call_args.args[0]
     assert "2026-10-12" not in payload
     assert "Nguyễn An" not in payload
@@ -409,7 +471,7 @@ async def test_gemini_disabled_even_when_key_is_configured(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_long_rag_reply_can_be_sent_back_as_followup_history(monkeypatch):
+async def test_rag_reply_is_concise_and_can_be_sent_back_as_followup_history(monkeypatch):
     from app.services import ai_service as module
     from app.schemas.ai import AIChatMessage
     monkeypatch.setattr(module.settings, "GEMINI_ENABLED", False)
@@ -419,7 +481,7 @@ async def test_long_rag_reply_can_be_sent_back_as_followup_history(monkeypatch):
     db = AsyncMock()
     db.execute.return_value = SimpleNamespace(mappings=lambda: SimpleNamespace(all=lambda: docs))
     result = await AIService.process_chat(db, 7, AIChatRequest(message="gio lam viec"), {"EMPLOYEE"})
-    assert result.answer_mode == "RAG" and len(result.reply) > 4000
+    assert result.answer_mode == "RAG" and len(result.reply) < 1600
     request = AIChatRequest(message="noi ro hon", conversation_history=[
         AIChatMessage(role="user", content="gio lam viec"),
         AIChatMessage(role="assistant", content=result.reply),

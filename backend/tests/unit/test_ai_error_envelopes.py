@@ -11,7 +11,7 @@ from app.services import ai_request_security as security
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("status,raw,expected", [(403, "AI_ACCESS_DENIED", "PERMISSION_DENIED"), (410, "AI_DRAFT_EXPIRED", "DRAFT_EXPIRED"), (429, "AI_RATE_LIMITED", "RATE_LIMITED"), (503, "AI_UNAVAILABLE", "AI_UNAVAILABLE")])
+@pytest.mark.parametrize("status,raw,expected", [(403, "AI_ACCESS_DENIED", "PERMISSION_DENIED"), (410, "AI_DRAFT_EXPIRED", "DRAFT_EXPIRED"), (429, "AI_RATE_LIMITED", "RATE_LIMITED"), (503, "AI_UNAVAILABLE", "AI_UNAVAILABLE"), (503, "ANALYSIS_DEPENDENCIES_UNAVAILABLE", "ANALYSIS_DEPENDENCIES_UNAVAILABLE"), (422, "ANALYSIS_ROW_LIMIT", "ANALYSIS_ROW_LIMIT"), (422, "ANALYSIS_VALUE_OUT_OF_RANGE", "ANALYSIS_VALUE_OUT_OF_RANGE")])
 async def test_safe_error_envelope_matches_audit_and_keeps_retry_after(monkeypatch, status, raw, expected):
     app = FastAPI()
     install_ai_errors(app, ("/ai", "/reports"))

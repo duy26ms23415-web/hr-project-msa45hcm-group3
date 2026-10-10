@@ -13,7 +13,7 @@ from app.models.knowledge import ReportRun
 from app.services.report_service import ReportService, build_xlsx_report
 from app.services.report_storage import delete_report, store_report
 from app.services.ai_request_security import secured_operation
-from app.services.ai_access import user_roles
+from app.services.ai_access import user_roles, require_reviewer_role
 
 
 class ReportRunService:
@@ -45,6 +45,7 @@ class ReportRunService:
     async def _create(db, user, req):
         run_id = uuid4().hex
         roles = user_roles(user)
+        require_reviewer_role(roles)
         scope = req.scope or ("COMPANY" if req.kind == "PAYROLL_SUMMARY" or req.kind == "HEADCOUNT" and roles & {"HR", "ADMIN"} else "DIRECT_REPORTS" if req.kind in {"HEADCOUNT", "APPROVAL_QUEUE"} else "SELF")
         employee_ids = []
         started = False

@@ -16,9 +16,9 @@ def actor(role="MANAGER"):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("kind, role, message, scope", [
-    ("MY_PAYSLIP", "EMPLOYEE", "Xem bảng lương của tôi tháng này", "SELF"),
+    ("MY_PAYSLIP", "MANAGER", "Xem bảng lương của tôi tháng này", "SELF"),
     ("PAYROLL_SUMMARY", "HR", "Xem bảng lương toàn công ty tháng này", "COMPANY"),
-    ("ATTENDANCE", "EMPLOYEE", "Xem công của tôi tháng này", "SELF"),
+    ("ATTENDANCE", "MANAGER", "Xem công của tôi tháng này", "SELF"),
 ])
 async def test_dispatch_kind_controls_current_month_dates(monkeypatch, kind, role, message, scope):
     from app.services import ai_report_draft_service as module
@@ -88,7 +88,8 @@ def test_report_fields_and_month_parser_are_closed():
         AIDraftService._validate_command_and_params("DRAFT_REPORT", {"employee_ids": "all"})
     with pytest.raises(HTTPException):
         AIDraftService._validate_command_and_params("DRAFT_REPORT", {"department_id": True})
-    AIReportDraftService.validate_access(actor("EMPLOYEE"), {"kind": "ATTENDANCE", "scope": "SELF"})
+    with pytest.raises(HTTPException):
+        AIReportDraftService.validate_access(actor("EMPLOYEE"), {"kind": "ATTENDANCE", "scope": "SELF"})
     with pytest.raises(HTTPException):
         AIReportDraftService.validate_access(actor("EMPLOYEE"), {"kind": "PAYROLL_SUMMARY"})
 

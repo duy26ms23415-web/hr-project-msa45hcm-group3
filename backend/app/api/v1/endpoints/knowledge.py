@@ -6,13 +6,13 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import TypeAdapter, ValidationError
-from sqlalchemy import func, select, delete
+from sqlalchemy import case, func, select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_user, require_roles
 from app.core.database import get_db
 from app.models.auth import UserAccount
 from app.models.knowledge import KnowledgeDocument, KnowledgeDocumentVersion, KnowledgeSection
-from app.schemas.knowledge import KnowledgeRead, KnowledgeWrite, KnowledgeSectionInput, KnowledgeSectionRead, KnowledgeVersionRead, KnowledgeSourceRead, KnowledgeVersionWrite, KnowledgeSectionsWrite
+from app.schemas.knowledge import KnowledgeRead, KnowledgeWrite, KnowledgeTitleWrite, KnowledgeSectionInput, KnowledgeSectionRead, KnowledgeVersionRead, KnowledgeSourceRead, KnowledgeVersionWrite, KnowledgeSectionsWrite
 from app.core.config import settings
 from app.services.ai_access import allowed_knowledge_roles, user_roles
 from app.services.knowledge_storage import PDFValidationError, delete_pdf, parse_pdf, resolve_storage_path, store_pdf
@@ -35,7 +35,7 @@ def _version_readable(user, document, version, document_id, preview=False):
         return False
     if document.status == "PUBLISHED" and version.status == "PUBLISHED":
         return True
-    return preview and document.status != "ARCHIVED" and version.status == "DRAFT" and bool(user_roles(user) & {"HR", "ADMIN"})
+    return preview and version.status in {"DRAFT", "PUBLISHED", "ARCHIVED"} and bool(user_roles(user) & {"HR", "ADMIN"})
 
 
 def _normalize_heading(value: str) -> str:
@@ -72,10 +72,26 @@ async def list_documents(db: AsyncSession = Depends(get_db), user: UserAccount =
 
 
 def _automatic_sections(pages: list[str]) -> list[KnowledgeSectionInput]:
-    return [KnowledgeSectionInput(
-        section_code=f"PAGE_{number}", heading=next(line.strip() for line in page.splitlines() if line.strip())[:300],
-        page_start=number, page_end=number,
-    ) for number, page in enumerate(pages, 1) if page.strip()]
+    sections = []
+    for number, page in enumerate(pages, 1):
+        lines = [line.strip() for line in page.splitlines() if line.strip()]
+        if not lines:
+            continue
+        headings = list(dict.fromkeys(line[:300] for line in lines if re.match(r"^(?:\d+(?:\.\d+)*[.)]\s+|Điều\s+\d+[.:]\s*)\S", line, re.IGNORECASE)))
+        if not headings:
+            headings = [lines[0][:300]]
+        for index, heading in enumerate(headings, 1):
+            sections.append(KnowledgeSectionInput(
+                section_code=f"PAGE_{number}" if len(headings) == 1 else f"PAGE_{number}_SECTION_{index}",
+                heading=heading, page_start=number, page_end=number,
+            ))
+    if len(sections) > 200:
+        # Keep every nonempty page represented within the mapping limit.
+        return [KnowledgeSectionInput(section_code=f"PAGE_{number}",
+                                      heading=next(line.strip() for line in page.splitlines() if line.strip())[:300],
+                                      page_start=number, page_end=number)
+                for number, page in enumerate(pages, 1) if page.strip()]
+    return sections
 
 
 @router.post("/upload", status_code=201)
@@ -145,6 +161,64 @@ async def update_document(document_id: int, req: KnowledgeWrite, db: AsyncSessio
         raise HTTPException(409, "Tài liệu đã công bố không thể ghi đè; hãy tạo phiên bản mới hoặc lưu trữ tài liệu")
     for key, value in req.model_dump().items():
         setattr(document, key, str(value) if key == "source_url" and value else value)
+    document.updated_by_user_id = user.user_account_id
+    await db.flush()
+    await db.refresh(document)
+    return document
+
+
+@router.patch("/{document_id}/title", response_model=KnowledgeRead)
+async def rename_document(document_id: int, req: KnowledgeTitleWrite, db: AsyncSession = Depends(get_db), user: UserAccount = Depends(require_roles(["HR"]))):
+    document = await db.scalar(select(KnowledgeDocument).where(KnowledgeDocument.document_id == document_id).with_for_update())
+    if not document:
+        raise HTTPException(404, "DOCUMENT_UNAVAILABLE")
+    _editor_access(user, document)
+    document.title = req.title
+    document.updated_by_user_id = user.user_account_id
+    await db.flush()
+    await db.refresh(document)
+    return document
+
+
+@router.post("/{document_id}/restore", response_model=KnowledgeRead)
+async def restore_document(document_id: int, db: AsyncSession = Depends(get_db), user: UserAccount = Depends(require_roles(["HR"]))):
+    document = await db.scalar(select(KnowledgeDocument).where(KnowledgeDocument.document_id == document_id).with_for_update())
+    if not document:
+        raise HTTPException(404, "DOCUMENT_UNAVAILABLE")
+    _editor_access(user, document)
+    if document.status != "ARCHIVED":
+        raise HTTPException(409, "Chỉ khôi phục tài liệu đã lưu trữ")
+    source = await db.scalar(select(KnowledgeDocumentVersion).where(
+        KnowledgeDocumentVersion.document_id == document_id,
+        KnowledgeDocumentVersion.minimum_role.in_(allowed_knowledge_roles(user_roles(user))),
+        KnowledgeDocumentVersion.storage_key.is_not(None),
+    ).order_by(case((KnowledgeDocumentVersion.version_id == document.current_version_id, 0), else_=1),
+               KnowledgeDocumentVersion.version_number.desc()))
+    if source:
+        max_number = await db.scalar(select(func.max(KnowledgeDocumentVersion.version_number)).where(
+            KnowledgeDocumentVersion.document_id == document_id))
+        sections = (await db.scalars(select(KnowledgeSection).where(KnowledgeSection.version_id == source.version_id))).all()
+        draft = KnowledgeDocumentVersion(
+            document_id=document_id, version_number=(max_number or 0) + 1, title=document.title,
+            minimum_role=source.minimum_role, status="DRAFT", storage_key=source.storage_key,
+            sha256=source.sha256, byte_size=source.byte_size, page_count=source.page_count,
+            mime_type=source.mime_type, effective_from=source.effective_from, effective_to=source.effective_to,
+            created_by_user_id=user.user_account_id,
+        )
+        db.add(draft)
+        await db.flush()
+        for section in sections:
+            db.add(KnowledgeSection(version_id=draft.version_id, section_code=section.section_code,
+                                   heading=section.heading, page_start=section.page_start, page_end=section.page_end,
+                                   anchor=section.anchor, content=section.content, is_answerable=section.is_answerable))
+        # Normalize historical drafts missed by earlier archive behavior.
+        historical = (await db.scalars(select(KnowledgeDocumentVersion).where(
+            KnowledgeDocumentVersion.document_id == document_id,
+            KnowledgeDocumentVersion.version_id != draft.version_id))).all()
+        for version in historical:
+            version.status = "ARCHIVED"
+    document.status = "DRAFT"
+    document.current_version_id = None
     document.updated_by_user_id = user.user_account_id
     await db.flush()
     await db.refresh(document)
@@ -374,12 +448,11 @@ async def archive_document(
     _editor_access(user, document)
     document.status = "ARCHIVED"
     document.updated_by_user_id = user.user_account_id
-    if document.current_version_id:
-        versions = (await db.scalars(select(KnowledgeDocumentVersion).where(
-            KnowledgeDocumentVersion.document_id == document_id
-        ))).all()
-        for version in versions:
-            version.status = "ARCHIVED"
+    versions = (await db.scalars(select(KnowledgeDocumentVersion).where(
+        KnowledgeDocumentVersion.document_id == document_id
+    ))).all()
+    for version in versions:
+        version.status = "ARCHIVED"
     await db.flush()
     await db.refresh(document)
     return document
@@ -453,6 +526,7 @@ async def read_version_file(
     document_id: int,
     version_id: int,
     preview: bool = False,
+    download: bool = False,
     db: AsyncSession = Depends(get_db),
     user: UserAccount = Depends(get_current_user),
 ):
@@ -474,7 +548,7 @@ async def read_version_file(
     return FileResponse(
         path,
         media_type="application/pdf",
-        filename="reference.pdf",
-        content_disposition_type="inline",
+        filename=(re.sub(r'[\x00-\x1f<>:"/\\|?*]', "_", version.title).strip() or "document") + ".pdf",
+        content_disposition_type="attachment" if download else "inline",
         headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff", "Content-Security-Policy": "sandbox"},
     )

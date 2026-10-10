@@ -27,6 +27,20 @@ class KnowledgeRead(BaseModel):
     status: str
     minimum_role: str
     updated_at: datetime
+    document_code: str | None = None
+    current_version_id: int | None = None
+
+
+class KnowledgeTitleWrite(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    title: str = Field(min_length=1, max_length=200)
+
+    @field_validator("title")
+    @classmethod
+    def nonblank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("Không được để trống")
+        return value.strip()
 
 
 class KnowledgeSectionInput(BaseModel):

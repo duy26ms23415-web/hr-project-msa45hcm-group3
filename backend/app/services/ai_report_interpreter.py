@@ -112,7 +112,7 @@ class GeminiReportInterpreter:
                                           for item in report_catalog(user)["reports"]],
                             "current_filters": {k: v for k, v in (current or {}).items()
                                                 if k in {"kind", "scope", "start_date", "end_date"}}}, ensure_ascii=False),
-                generation_config={"temperature": 0, "max_output_tokens": 256},
+                generation_config={"temperature": 0, "max_output_tokens": 256, "response_mime_type": "application/json"},
                 request_options={"timeout": 5, "retry": None},
             ), timeout=5)
             answers = ReportPromptResult.model_validate_json(payload.text.strip()).model_dump(exclude_none=True)

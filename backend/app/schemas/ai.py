@@ -53,7 +53,7 @@ class AIIntentResult(BaseModel):
         "LEAVE_BALANCE", "ATTENDANCE_SUMMARY", "DRAFT_LEAVE", "DRAFT_FIX",
         "REPORT_ATTENDANCE", "REPORT_LEAVE", "REPORT_ATTENDANCE_FIX",
         "REPORT_LEAVE_QUEUE", "REPORT_ATTENDANCE_QUEUE", "REPORT_HEADCOUNT",
-        "REPORT_PAYSLIP", "REPORT_PAYROLL", "OPEN_KNOWLEDGE", "POLICY_QUERY", "OUT_OF_SCOPE",
+        "REPORT_PAYSLIP", "REPORT_PAYROLL", "ANALYZE_REPORT", "OPEN_KNOWLEDGE", "POLICY_QUERY", "OUT_OF_SCOPE",
     ]
 
 
@@ -66,6 +66,18 @@ class AIQuote(BaseModel):
 class AIQuotesResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
     quotes: list[AIQuote] = Field(max_length=3)
+
+
+class AIGroundedStatement(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    source: StrictInt = Field(ge=1)
+    text: StrictStr = Field(min_length=1, max_length=600)
+    evidence: StrictStr = Field(min_length=1, max_length=1800)
+
+
+class AIGroundedAnswer(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    statements: list[AIGroundedStatement] = Field(max_length=3)
 
 
 class AIChatAction(BaseModel):

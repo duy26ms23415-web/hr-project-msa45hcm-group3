@@ -115,7 +115,8 @@ async def test_report_run_read_rechecks_owner_and_current_employee_scope(monkeyp
     db = AsyncMock()
     db.scalar.return_value = run
     monkeypatch.setattr(ReportService, "visible_employee_ids", AsyncMock(return_value=("SELF", [7])))
-    owner = SimpleNamespace(user_account_id=9)
+    owner = user("MANAGER")
+    owner.user_account_id = 9
     assert await _authorized_run(db, owner, run.run_id) is run
     sql = str(db.scalar.call_args.args[0].compile(dialect=postgresql.dialect()))
     assert "owner_user_account_id" in sql
@@ -134,7 +135,7 @@ async def test_owner_report_expiry_returns_expired_code_before_data_lookup(monke
     scope = AsyncMock()
     monkeypatch.setattr(ReportService, "visible_employee_ids", scope)
     with pytest.raises(HTTPException) as expired:
-        await _authorized_run(db, SimpleNamespace(user_account_id=9), "a" * 32)
+        await _authorized_run(db, SimpleNamespace(user_account_id=9, role_assignments=user("MANAGER").role_assignments), "a" * 32)
     assert expired.value.status_code == 410 and expired.value.detail == "REPORT_EXPIRED"
     assert run.status == "EXPIRED"
     scope.assert_not_called()
@@ -146,7 +147,7 @@ async def test_failed_run_is_not_reclassified_by_preview_after_expiry():
     db = AsyncMock()
     db.scalar.return_value = run
     with pytest.raises(HTTPException) as failed:
-        await _authorized_run(db, SimpleNamespace(user_account_id=9), "a" * 32)
+        await _authorized_run(db, SimpleNamespace(user_account_id=9, role_assignments=user("MANAGER").role_assignments), "a" * 32)
     assert failed.value.status_code == 404 and run.status == "FAILED"
     db.commit.assert_not_called()
 
@@ -174,7 +175,7 @@ async def test_payroll_report_denies_manager_summary_before_query_and_unreleased
     db.scalar.assert_not_called()
     db.scalar.return_value = SimpleNamespace(status="CALCULATED")
     with pytest.raises(HTTPException) as hidden:
-        await ReportService.generate(db, user("EMPLOYEE"), "MY_PAYSLIP", date(2026, 10, 1), date(2026, 10, 31), None)
+        await ReportService.generate(db, user("MANAGER"), "MY_PAYSLIP", date(2026, 10, 1), date(2026, 10, 31), None)
     assert hidden.value.status_code == 404
     db.execute.assert_not_called()
 
@@ -187,7 +188,7 @@ async def test_released_payslip_filters_authenticated_employee_and_preserves_dec
     fields = ("base_salary", "standard_work_days", "actual_work_days", "allowance_amount", "overtime_amount", "deduction_amount", "gross_salary", "insurance_deduction", "taxable_income", "personal_income_tax", "other_deductions", "net_salary")
     line = SimpleNamespace(employee_id=7, currency_code="VND", **{field: Decimal("1234567890123456.78") for field in fields})
     db.execute.return_value = SimpleNamespace(first=lambda: (line, "E7", "Employee Seven", 1))
-    report = await ReportService.generate(db, user("EMPLOYEE"), "MY_PAYSLIP", date(2026, 10, 1), date(2026, 10, 31), None)
+    report = await ReportService.generate(db, user("MANAGER"), "MY_PAYSLIP", date(2026, 10, 1), date(2026, 10, 31), None)
     sql = str(db.execute.call_args.args[0].compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}))
     assert "hr_payroll_lines.employee_id = 7" in sql
     assert report["rows"][0]["net_salary"] == "1234567890123456.78"
@@ -222,7 +223,7 @@ async def test_unknown_legacy_currency_is_not_labeled_or_aggregated_as_vnd():
     db.scalar.return_value = SimpleNamespace(status="APPROVED", payroll_period_id=1)
     db.execute.return_value = SimpleNamespace(first=lambda: (SimpleNamespace(currency_code=None), "E7", "Employee", 1))
     with pytest.raises(HTTPException) as unknown:
-        await ReportService.generate(db, user("EMPLOYEE"), "MY_PAYSLIP", date(2026, 10, 1), date(2026, 10, 31), None)
+        await ReportService.generate(db, user("MANAGER"), "MY_PAYSLIP", date(2026, 10, 1), date(2026, 10, 31), None)
     assert unknown.value.status_code == 409 and unknown.value.detail == "PAYROLL_CURRENCY_UNAVAILABLE"
 
 

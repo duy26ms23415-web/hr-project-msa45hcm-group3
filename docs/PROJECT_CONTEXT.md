@@ -48,7 +48,8 @@ Nguồn thiết kế: [README](../README.md). Repo có frontend React/Vite và b
 - `POST /api/v1/ai/chat`: RAG hỏi đáp chính sách; tool tra công, lượt thiếu và số dư phép của người dùng; hỗ trợ tạo phép/giải trình bằng ngôn ngữ tự nhiên.
 - Luồng: hội thoại → nhận intent/tham số → truy xuất chính sách hoặc gọi service nghiệp vụ → kết quả. Tool phải dùng danh tính xác thực, cùng kiểm tra quyền và validation như thao tác thông thường.
 - Copilot hiện truyền nháp vào form để người dùng kiểm tra/gửi qua API nghiệp vụ; LLM không ghi đơn. Gemini async timeout 5 giây, fallback trích nguồn; lexical RAG lấy tài liệu đã công bố trong DB, lọc quyền trước truy xuất. Chưa có vector RAG/function tools.
-- ADMIN/HR quản lý kiến thức; quyền đọc tối thiểu EMPLOYEE < MANAGER < HR < ADMIN. Báo cáo công/phép và CSV theo phạm vi bản thân/quản lý trực tiếp/toàn công ty. Migration, API và giới hạn: [AI_COPILOT](AI_COPILOT.md).
+- ADMIN/HR quản lý kiến thức; quyền đọc tối thiểu EMPLOYEE < MANAGER < HR < ADMIN. Báo cáo/phân tích chỉ MANAGER/HR/ADMIN, EMPLOYEE không có kể cả SELF; quản lý giữ SELF/DIRECT_REPORTS, COMPANY/tổng hợp lương chỉ HR/ADMIN. Ma trận prompt: [AI_PROMPT_PERMISSIONS](AI_PROMPT_PERMISSIONS.md). Migration/API: [AI_COPILOT](AI_COPILOT.md).
+- Kho tài liệu xem/tải PDF lưu trữ cho HR/ADMIN, đổi tên và khôi phục thành version DRAFT mới từ file/mapping cũ; phải kiểm tra/công bố để AI dùng. Hỏi chính sách/quy trình ưu tiên RAG, nguồn kèm link đúng section/trang; hướng dẫn luồng ở SETUP_GUIDE.
 - Nguồn: README §2, §3.6, §5 quy tắc 5.
 
 ## 7. Điểm chưa chốt — hỏi khi tác vụ phụ thuộc

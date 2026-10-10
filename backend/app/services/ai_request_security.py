@@ -29,6 +29,7 @@ ACTIONS = frozenset(
         "DRAFT_CANCEL",
         "REPORT_CREATE",
         "REPORT_DOWNLOAD",
+        "REPORT_ANALYSIS",
         "UPLOAD",
         "PUBLISH",
         "KNOWLEDGE_SEARCH",

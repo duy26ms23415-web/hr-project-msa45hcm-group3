@@ -36,6 +36,8 @@ def _field(record, name, default=None):
 
 
 def retrieve(question: str, documents, limit: int = 3) -> list[Passage]:
+    if limit <= 0:
+        return []
     query = tokens(question)
     if not query:
         return []
@@ -60,7 +62,7 @@ def retrieve(question: str, documents, limit: int = 3) -> list[Passage]:
             overlap = query & tokens(chunk)
             if not overlap or len(overlap) / len(query) < 0.35:
                 continue
-            score = len(overlap) + len(query & tokens(title))
+            score = len(overlap) + len(query & tokens(title)) + 2 * len(query & tokens(section_metadata["heading"] or ""))
             ranked.append((score, Passage(
                 document_id=_field(doc, "document_id"),
                 title=title,
@@ -69,4 +71,15 @@ def retrieve(question: str, documents, limit: int = 3) -> list[Passage]:
                 **section_metadata,
             )))
     ranked.sort(key=lambda item: item[0], reverse=True)
-    return [passage for _, passage in ranked[:limit]]
+    selected = []
+    seen = set()
+    for _, passage in ranked:
+        # A PDF section links to one location; show its best matching excerpt once.
+        key = (passage.document_id, passage.version_id, passage.section_id)
+        if passage.section_id is not None and key in seen:
+            continue
+        seen.add(key)
+        selected.append(passage)
+        if len(selected) >= limit:
+            break
+    return selected

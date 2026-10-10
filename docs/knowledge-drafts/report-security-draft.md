@@ -34,7 +34,7 @@ Chọn loại, kỳ và phạm vi; tạo báo cáo rồi xem preview và tải E
 
 Mục REPORT.ACCESS — trang PDF 3.
 
-Nhân viên xem dữ liệu bản thân. Quản lý xem bản thân và cấp dưới trực tiếp. HR/Admin chỉ nhận phạm vi rộng khi capability tương ứng được backend cấp.
+Nhân viên chỉ tra cứu dữ liệu bản thân qua chức năng cá nhân, không tạo/xem/xuất hoặc phân tích báo cáo. Quản lý dùng báo cáo phạm vi bản thân và cấp dưới trực tiếp. HR/Admin nhận phạm vi toàn công ty và tổng hợp lương khi capability tương ứng được backend cấp. Báo cáo phiếu lương cá nhân cũng chỉ dành cho role được quyền báo cáo, không thay quyền xem phiếu lương qua màn hình cá nhân.
 
 Quyền được xác định từ JWT và dữ liệu quan hệ phía máy chủ. Bộ lọc gửi từ trình duyệt không thể mở rộng quyền.
 

@@ -19,8 +19,22 @@ from app.services.report_storage import delete_report, resolve_report_path
 from app.services.report_run_service import ReportRunService
 from app.services.ai_request_security import secured_operation
 from app.services.report_catalog import report_catalog
+from app.services.report_access import authorized_run
+from app.services.ai_access import require_reviewer_role, user_roles
 
-router = APIRouter()
+async def require_report_user(user: UserAccount = Depends(get_current_user)):
+    require_reviewer_role(user_roles(user))
+
+
+router = APIRouter(dependencies=[Depends(require_report_user)])
+
+
+@router.get("/runs/{run_id}/analysis")
+async def analyze_report_run(run_id: str, db: AsyncSession = Depends(get_db),
+                             user: UserAccount = Depends(get_current_user)):
+    from app.services.ai_analysis_tool import AIAnalysisTool
+    result = await AIAnalysisTool.execute(db, user, run_id)
+    return JSONResponse(result, headers={"Cache-Control": "private, no-store"})
 
 
 @router.get("/catalog")
@@ -46,33 +60,7 @@ def _decode_history_cursor(cursor):
 
 
 async def _authorized_run(db: AsyncSession, user: UserAccount, run_id: str) -> ReportRun:
-    run = await db.scalar(select(ReportRun).where(
-        ReportRun.run_id == run_id,
-        ReportRun.owner_user_account_id == user.user_account_id,
-    ))
-    if not run:
-        raise HTTPException(404, "REPORT_UNAVAILABLE")
-    if run.status not in {"READY", "EXPIRED"}:
-        raise HTTPException(404, "REPORT_UNAVAILABLE")
-    now = datetime.now(timezone.utc)
-    if run.status == "EXPIRED" or run.expires_at <= now:
-        run.status = "EXPIRED"
-        delete_report(run.storage_key)
-        delete_report(run.snapshot_storage_key)
-        run.storage_key = None
-        run.snapshot_storage_key = None
-        await db.commit()
-        raise HTTPException(410, "REPORT_EXPIRED")
-    try:
-        _, current_ids = await ReportService.visible_employee_ids(
-            db, user, run.kind, run.scope, run.filters.get("department_id"),
-            date.fromisoformat(run.filters["start_date"]), date.fromisoformat(run.filters["end_date"]),
-        )
-    except HTTPException as exc:
-        raise HTTPException(404, "REPORT_UNAVAILABLE") from exc
-    if not set(run.scope_snapshot).issubset(set(current_ids)):
-        raise HTTPException(404, "REPORT_UNAVAILABLE")
-    return run
+    return await authorized_run(db, user, run_id)
 
 
 async def _cleanup_expired_runs(db: AsyncSession, owner_id: int) -> None:

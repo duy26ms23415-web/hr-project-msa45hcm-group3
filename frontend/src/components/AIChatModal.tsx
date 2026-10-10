@@ -3,7 +3,7 @@ import { Modal, Input, Button, Dropdown, Card, Spin, Space, Typography, message 
 import { SendOutlined, RobotOutlined, UserOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import api from '../api/client';
 import { ChatReportPreview } from './ChatReportPreview';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import type { AIChatAction, AIChatResponse, AISource, AISuggestion, AIInputOption, AIDraftInputs, AIChatRequest } from '../types/ai';
 import { useAuth } from '../context/AuthContext';
 
@@ -34,6 +34,7 @@ export const AIChatModal: React.FC<AIChatModalProps> = ({ open, onClose }) => {
   ]);
   const [previewRunId, setPreviewRunId] = useState<string | null>(null);
   const [editingRunId, setEditingRunId] = useState<string | null>(null);
+  const [lastReportRunId, setLastReportRunId] = useState<string | null>(null);
   const [inputVal, setInputVal] = useState('');
   const [loading, setLoading] = useState(false);
   const [activeDraftId, setActiveDraftId] = useState<string | null>(null);
@@ -63,8 +64,8 @@ export const AIChatModal: React.FC<AIChatModalProps> = ({ open, onClose }) => {
         { suggestion_id: 'leave_balance', prompt: 'Số dư phép năm của tôi còn bao nhiêu?', catalog_version: 'v1' },
         { suggestion_id: 'draft_leave', prompt: 'Tôi muốn xin nghỉ phép', catalog_version: 'v1' },
         { suggestion_id: 'attendance_fix', prompt: 'Tạo giải trình chấm công', catalog_version: 'v1' },
-        { suggestion_id: 'my_attendance_report', prompt: 'Tạo báo cáo công của tôi tháng này', catalog_version: 'v1' },
       ] : [];
+      if (personal && roles.some((role) => ['MANAGER', 'HR', 'ADMIN'].includes(role))) fallback.push({ suggestion_id: 'my_attendance_report', prompt: 'Tạo báo cáo công của tôi tháng này', catalog_version: 'v1' });
       if (valid && roles.some((role) => ['HR', 'ADMIN'].includes(role))) fallback.push({ suggestion_id: 'knowledge_admin', prompt: 'Mở quản lý tài liệu nội quy', catalog_version: 'v1' });
       setSuggestions(fallback);
       let cancelled = false;
@@ -101,7 +102,8 @@ export const AIChatModal: React.FC<AIChatModalProps> = ({ open, onClose }) => {
 
       const request: AIChatRequest = {
         message: text,
-        ...(editingRunId && !startNew && !activeDraftId ? { report_run_id: editingRunId } : {}),
+        ...((editingRunId || lastReportRunId && /báo cáo (này|vừa)|bao cao (nay|vua)|this report/i.test(text)) && !startNew && !activeDraftId
+          ? { report_run_id: editingRunId || lastReportRunId! } : {}),
         conversation_history: history,
         ...(suggestionId ? { suggestion_id: suggestionId } : {}),
         ...(inputs && activeDraftId && !startNew ? { inputs } : {}),
@@ -109,6 +111,7 @@ export const AIChatModal: React.FC<AIChatModalProps> = ({ open, onClose }) => {
       };
       const res = await api.post<AIChatResponse>('/ai/chat', request);
       if (res.data.action?.action_type === 'OPEN_REPORT' && res.data.action.data.run_id) {
+        setLastReportRunId(res.data.action.data.run_id);
         setPreviewRunId(res.data.action.data.run_id); setEditingRunId(null);
       } else if (res.data.draft_id || startNew) setEditingRunId(null);
       setActiveDraftId(res.data.draft_id || null);
@@ -289,14 +292,10 @@ export const AIChatModal: React.FC<AIChatModalProps> = ({ open, onClose }) => {
                 {!!msg.sources?.length && <div style={{ marginTop: 12 }}>
                   <Typography.Text strong>Tài liệu tham khảo</Typography.Text>
                   {msg.sources.map((source, index) => <div key={`${source.document_id}-${source.section_code || index}`}>
-                    <Button type="link" style={{ padding: 0, whiteSpace: 'normal', height: 'auto' }} onClick={() => {
-                      if (source.viewer_path) {
-                        onClose();
-                        navigate(source.viewer_path);
-                      } else {
-                        void readReference(source.document_id);
-                      }
-                    }}>[{index + 1}] {source.title}{source.section_code ? ` — ${source.section_code} ${source.heading || ''}, trang ${source.page_start}` : ''}</Button>
+                    {source.viewer_path ? <Link to={source.viewer_path} onClick={onClose} style={{ display: 'block', padding: '6px 0', color: '#1677ff' }}>
+                      [{index + 1}] {source.title}<br />
+                      <span style={{ fontSize: 12 }}>Xem đúng mục: {source.heading || source.section_code} · Trang {source.page_start}{source.page_end !== source.page_start ? `–${source.page_end}` : ''}</span>
+                    </Link> : <Button type="link" style={{ padding: 0, whiteSpace: 'normal', height: 'auto' }} onClick={() => void readReference(source.document_id)}>[{index + 1}] {source.title} · Xem nội dung nguồn</Button>}
                   </div>)}
                 </div>}
 

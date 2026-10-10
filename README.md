@@ -148,7 +148,7 @@ Hệ thống áp dụng cho **một văn phòng/chi nhánh duy nhất**, không 
 - Hỏi số dư phép: trả dữ liệu thực tế của người đăng nhập, kèm chính sách published còn hiệu lực và đúng quyền nếu tìm được nguồn. Chấm công chỉ phản ánh bản ghi hiện có trong kỳ đã chọn.
 - Soạn đơn: giữ ngày/loại đã nhận dạng, hỏi phần thiếu; thiếu phép năm cảnh báo sớm. Người dùng chọn loại khác đang hoạt động, không tự đổi sang không lương. Hỏi số dư trong khi soạn vẫn giữ nháp. Gửi đơn qua form và quản lý trực tiếp.
 - Báo cáo: yêu cầu trong chat → hỏi kỳ/phạm vi thiếu → tạo snapshot/template → preview bảng và Tải Excel → Chỉnh qua chat để tạo snapshot mới. Không có tab/trang báo cáo hoặc lịch sử tải. Route /reports cũ mở chat; API giữ tương thích. Khi mở snapshot mới, preview bắt đầu ở trang 1. Yêu cầu lương tháng này dùng trọn tháng, kể cả loại báo cáo do intent dispatch xác định.
-- Tài liệu: HR/ADMIN kéo thả PDF, mặc định lưu nháp cho nhân viên; giới hạn người đọc là tùy chọn. Tên từ file, section/trang tự tạo. Mỗi lần tải mới tăng phiên bản, cần kiểm tra preview rồi công bố.
+- Tài liệu: HR/ADMIN kéo thả PDF, đặt tên dễ hiểu trước khi lưu nháp; giới hạn người đọc là tùy chọn. Section/trang tự tạo theo heading có số, hoặc theo trang khi không nhận diện được heading. Mỗi lần tải mới tăng phiên bản, cần kiểm tra rồi công bố.
 
 Kiến trúc và điểm mở rộng: [AI chatbox](docs/AI_COPILOT.md), [Architecture](docs/ARCHITECTURE.md#kiến-trúc-ai-chatbox-và-công-cụ). Cấu hình và nghiệm thu: [Setup](docs/SETUP_GUIDE.md#kiểm-tra-flow-ai-chatbox).
 
@@ -172,6 +172,14 @@ Knowledge hỗ trợ upload PDF riêng tư, version/section, kiểm tra heading/
 HR/ADMIN sửa tên/quyền/hiệu lực và section mapping của phiên bản DRAFT qua `PUT /ai/knowledge/{documentId}/versions/{versionId}` hoặc `PUT .../sections`. Mapping được đối chiếu heading/trang và hash PDF trước khi lưu; `is_answerable=false` giữ mục chưa ban hành ngoài câu trả lời AI. Bản PUBLISHED không thể sửa mapping. UI có “Sửa mục/trang”, “Xem trước” và công bố sau kiểm tra; preview yêu cầu quyền quản trị trên cả document/version, flag `preview=true` không cấp quyền. File tải được kiểm SHA-256; danh sách phiên bản cũng lọc quyền từng version.
 
 Danh sách đơn dùng `view=mine|approvals|visible`. `approvals` chỉ trả PENDING của nhân viên đang có quan hệ quản lý trực tiếp với người gọi; duyệt/từ chối cũng kiểm tra lại quan hệ hiện tại và cấm tự duyệt, kể cả tài khoản ADMIN. HR có thể duyệt nếu là quản lý trực tiếp. Citation của PDF chứa mã mục/trang và mở viewer đúng phiên bản; tài liệu legacy không có liên kết trang.
+
+Kho tài liệu hỗ trợ tìm tên/mã không dấu, lọc trạng thái và người đọc, đổi tên hiển thị (`PATCH /api/v1/ai/knowledge/{id}/title`), xem nội dung văn bản hoặc toàn bộ PDF và tải PDF. HR/ADMIN được xem/tải phiên bản lưu trữ bằng preview có kiểm JWT/quyền và hash; nhân viên không được đọc nguồn lưu trữ. Viewer có thanh Trước/Trang/Sau giữ vị trí khi cuộn. “Kiểm tra & công bố” hiển thị tên phiên bản, quyền đọc, hiệu lực, mục/trang và các mục AI được dùng; PDF mở ở tab riêng để giữ bước kiểm tra. “Khôi phục về bản nháp” (`POST /api/v1/ai/knowledge/{id}/restore`) tạo phiên bản DRAFT mới từ PDF và mapping đã lưu, không yêu cầu tải lại; phiên bản cũ giữ trong lịch sử ARCHIVED. Bản nháp cần công bố mới trở thành nguồn AI; tài liệu văn bản không có PDF được khôi phục trạng thái DRAFT.
+
+Chat ưu tiên các câu hỏi chính sách/quy trình/hướng dẫn trước handler tạo đơn: “Quy trình tạo đơn nghỉ phép là gì?” trả đoạn từ nguồn đã công bố kèm **Xem đúng mục**, không tự tạo đơn. RAG lọc quyền, publish, thời gian hiệu lực và is_answerable trước tìm kiếm; ưu tiên heading phù hợp và không lặp liên kết cùng section. Nếu không có nguồn đủ căn cứ, trả KNOWLEDGE_NOT_FOUND. Kho chỉ có bản nháp/lưu trữ chưa thể trả lời chính sách; HR cần kiểm tra và công bố tài liệu được phép sử dụng.
+
+Bản nháp có nút **Kiểm tra & công bố ngay trong danh sách** để mở thẳng bản PDF nháp mới nhất, không cần qua lịch sử phiên bản. Lịch sử/tải bản mới nằm trong menu thao tác; tài liệu đã công bố có mục kiểm tra bản nháp thay thế trong menu. Tài liệu văn bản legacy mở form hiện có.
+
+Khi Gemini bật và có key, hỏi đáp chính sách dùng Gemini viết lời giải thích tự nhiên theo câu hỏi và các nguồn được phép đọc, không dùng bảng mẫu câu trả lời theo chủ đề. Mỗi ý có citation và evidence nguyên văn; backend kiểm ID nguồn, đoạn evidence và số liệu mới trước hiển thị. Giữ nguyên điều kiện/ngoại lệ và nhắc khi nội dung nguồn còn ghi dự thảo/chưa xác nhận. Kiểm evidence không chứng minh mọi sắc thái diễn giải đều đúng. Provider lỗi hoặc evidence không hợp lệ dùng fallback tối đa ba câu liên quan, không dán trang PDF hay câu cắt dở. Nguồn/đường dẫn do server tạo, LLM không quyết định quyền hoặc URL.
 
 Gemini chỉ phân loại intent vào enum đóng sau khi fallback xác định không xử lý được; backend tự parse dữ liệu, kiểm tra quyền rồi mới gọi handler. Prompt provider đã bỏ history và làm mờ email, số điện thoại, ngày/giờ, ID số và đoạn lý do; không gửi personal context, dữ liệu báo cáo hoặc truy vấn DB. Nội quy ưu tiên trả nguồn xác định; chỉ dùng Gemini khi người dùng yêu cầu tóm tắt/giải thích/so sánh và chỉ nhận quote nguyên văn theo schema đóng. Lỗi provider dùng fallback nguồn hoặc mã `AI_UNAVAILABLE`.
 
@@ -523,7 +531,23 @@ API sử dụng tiền tố `/api/v1`. Toàn bộ API yêu cầu xác thực JWT
 4. **Hạn chốt giải trình công:** Các yêu cầu giải trình công cho tháng cũ chỉ được duyệt trước thời điểm HR chốt kỳ lương (`CLOSED`). Sau khi kỳ đã đóng, mọi giải trình chưa duyệt đều tự động coi như không hợp lệ.
 5. **Function Calling của AI:** Endpoint `POST /ai/chat` khi nhận intent tạo đơn (nghỉ phép/giải trình) sẽ kích hoạt công cụ nội bộ gọi trực tiếp service tương ứng với đầy đủ bước validate, trả về kết quả kèm mã đơn để người dùng xác nhận.
 
+### Công cụ phân tích dữ liệu trong AI chat
+
+Báo cáo và phân tích chỉ dành cho MANAGER/HR/ADMIN. EMPLOYEE đơn thuần không được tạo báo cáo, kể cả dữ liệu SELF; prompt bị ẩn và API/service chặn trực tiếp. MANAGER giữ scope SELF/DIRECT_REPORTS, tổng hợp lương và COMPANY chỉ HR/ADMIN. Tra cứu công/phép, xem phiếu lương cá nhân và soạn đơn vẫn theo quyền cá nhân. Ma trận prompt, điều kiện và điểm kiểm quyền: [AI_PROMPT_PERMISSIONS](docs/AI_PROMPT_PERMISSIONS.md).
+
+Revision `0a1b2c3d4e5f` cho phép audit REPORT_ANALYSIS; chạy upgrade trước khi phân tích. Lỗi phân tích hiển thị thông báo backend cụ thể, gồm mất quyền/hết hạn/rate limit/thiếu thư viện; không gộp thành cảnh báo thư viện chung.
+
+Chat nhận “phân tích chấm công của tôi tháng trước” để chọn báo cáo/phạm vi/kỳ; phần thiếu được hỏi lại. Sau khi tạo báo cáo, chọn **Phân tích & biểu đồ** trong preview để xem tổng, trung bình, trung vị, min/max và tải PNG. “Phân tích báo cáo này” dùng snapshot gần nhất trong chat. Công cụ dùng pandas, NumPy và Matplotlib; không thực thi Python/SQL do người dùng hoặc Gemini sinh ra. Hiện hỗ trợ thống kê mô tả theo chỉ số cố định, chưa hỗ trợ dữ liệu tải lên tùy ý hay dự báo.
+
+API `GET /api/v1/reports/runs/{run_id}/analysis` kiểm owner, hạn dùng và quyền hiện tại như preview/download; trả thống kê, tần suất và PNG base64 của toàn bộ snapshot, tối đa 10.000 dòng. Tiền tính bằng Decimal; không cộng gộp khác loại tiền tệ.
+
+Biểu đồ chọn theo nghiệp vụ: nhân sự dùng thanh ngang theo phòng ban, xếp chồng trạng thái và đếm số người; công so sánh tổng ngày có mặt/thiếu lượt/vắng; phép so sánh ngày đã duyệt và số dư; lương so sánh GROSS/thực nhận theo phòng ban hoặc các khoản trong phiếu lương. Nhãn tiếng Việt, đơn vị rõ ràng; không vẽ Min/Median/Mean/Max thành các nhóm. Trên 20 phòng ban, gộp phần còn lại để giữ tổng; nhiều loại tiền chỉ biểu diễn số nhân viên, không gộp tiền.
+
 ### Demo seed and QR schema
+
+Alembic chạy tại `backend/`, hoặc từ root dùng `python -B -m alembic -c backend/alembic.ini upgrade head` với interpreter hr-backend. Script/import paths dựa trên vị trí config; migration đọc `backend/.env`. PostgreSQL phải nhận kết nối trước khi upgrade; không tự khởi tạo DB hoặc seed.
+
+Head hợp nhất QR/AI là `f1a2b3c4d5e6`; hai nhánh QR thêm `card_code` theo cách không trùng cột. Không reset/stamp DB để xử lý lỗi nhiều head.
 
 PostgreSQL startup does not seed data automatically. From backend/, run `alembic upgrade head` before `python -m app.scripts.seed_data`. Migration `e0f1a2b3c4d5` adds the nullable `hr_qr_cards.card_code` column required by the existing ORM. Seed commits once at the end; a failure rolls back new records from that run.
 

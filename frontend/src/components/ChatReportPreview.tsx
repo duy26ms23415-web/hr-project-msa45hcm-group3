@@ -3,6 +3,7 @@ import dayjs from 'dayjs';
 import { Alert, Button, Modal, Space, Table, Typography, message } from 'antd';
 import { DownloadOutlined } from '@ant-design/icons';
 import api from '../api/client';
+import { aiErrorMessage } from '../api/aiErrors';
 import type { Report, ReportRun } from '../types/reports';
 import { reportFields, reportLabels, reportKindLabels } from './reportPresentation';
 
@@ -17,6 +18,17 @@ function ReportPreview({ runId, onClose, onRevise }: Props) {
   const [loading, setLoading] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState('');
+  const [analysis, setAnalysis] = useState<{ row_count: number; metrics: Record<string, Record<string, string | number>>; frequencies: Record<string, Record<string, number>>; chart: string | null } | null>(null);
+  const [analyzing, setAnalyzing] = useState(false);
+  const analyze = async () => {
+    if (!runId) return;
+    setAnalyzing(true); setAnalysis(null);
+    try {
+      const res = await api.get('/reports/runs/' + runId + '/analysis');
+      setAnalysis(res.data);
+    } catch (error) { message.error(await aiErrorMessage(error, 'Không phân tích được báo cáo. Vui lòng thử lại.')); }
+    finally { setAnalyzing(false); }
+  };
   useEffect(() => {
     if (!runId) return;
     let cancelled = false;
@@ -49,9 +61,22 @@ function ReportPreview({ runId, onClose, onRevise }: Props) {
         <div><Typography.Text strong>{data.report.start_date.split('-').reverse().join('/')} – {data.report.end_date.split('-').reverse().join('/')}</Typography.Text>
           <div><Typography.Text type="secondary">{({ SELF: 'Bản thân', DIRECT_REPORTS: 'Nhân viên trực tiếp', COMPANY: 'Toàn công ty' })[data.run.scope]} · {data.total_rows} dòng</Typography.Text></div>
         </div>
-        <Space><Button onClick={() => { onRevise(data.run.run_id); onClose(); }}>Chỉnh qua chat</Button>
+        <Space><Button loading={analyzing} onClick={() => void analyze()}>Phân tích & biểu đồ</Button><Button onClick={() => { onRevise(data.run.run_id); onClose(); }}>Chỉnh qua chat</Button>
           <Button type="primary" icon={<DownloadOutlined />} loading={exporting} disabled={loading} onClick={() => void download()}>Tải Excel</Button></Space>
       </Space>
+      {analysis && <Space orientation="vertical" style={{ width: '100%' }}>
+        <Typography.Text>Phân tích toàn bộ {analysis.row_count} dòng của báo cáo.</Typography.Text>
+        <Table size="small" pagination={false} rowKey="metric"
+          dataSource={Object.entries(analysis.metrics).map(([metric, stats]) => ({ metric, ...stats }))}
+          columns={[{ title: 'Chỉ số', dataIndex: 'metric', render: (value: string) => reportLabels[value] || value },
+            ...Object.entries({ count: 'Số giá trị', missing: 'Thiếu', sum: 'Tổng', mean: 'Trung bình', median: 'Trung vị', min: 'Nhỏ nhất', max: 'Lớn nhất' }).map(([key, title]) => ({ title, dataIndex: key }))]}
+          scroll={{ x: 900 }} />
+        {Object.entries(analysis.frequencies).map(([field, counts]) => <Typography.Paragraph key={field}>
+          {reportLabels[field] || field}: {Object.entries(counts).map(([value, count]) => `${value}: ${count}`).join(' · ')}
+        </Typography.Paragraph>)}
+        {analysis.chart && <><img src={analysis.chart} alt="Biểu đồ thống kê báo cáo" style={{ display: 'block', width: '100%', height: 'auto' }} />
+          <Button href={analysis.chart} download="report-analysis.png">Tải biểu đồ PNG</Button></>}
+      </Space>}
       <Table size="small" bordered loading={loading} dataSource={data.report.rows.map((row, i) => ({ ...row, key: i }))}
         columns={fields.map((key) => ({ title: reportLabels[key] || key, dataIndex: key, width: key === 'full_name' ? 200 : 150,
           fixed: key === 'employee_code' || key === 'full_name' ? 'left' as const : undefined,

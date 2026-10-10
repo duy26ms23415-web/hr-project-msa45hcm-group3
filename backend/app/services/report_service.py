@@ -15,7 +15,7 @@ from app.models.organization import Employee, Department
 from app.models.attendance import AttendanceDay, AttendanceFix
 from app.models.leave import LeaveRequest, EmployeeLeaveBalance
 from app.models.payroll import PayrollPeriod, PayrollLine
-from app.services.ai_access import report_scope, user_roles
+from app.services.ai_access import report_scope, user_roles, require_reviewer_role
 
 MAX_REPORT_ROWS = 10000
 
@@ -283,6 +283,7 @@ class ReportService:
         start: date | None = None, end: date | None = None,
     ) -> tuple[str, list[int]]:
         roles = user_roles(user)
+        require_reviewer_role(roles)
         if kind == "MY_PAYSLIP":
             if scope not in {None, "SELF"} or department_id is not None:
                 raise HTTPException(status_code=403, detail="AI_ACCESS_DENIED")
@@ -327,6 +328,7 @@ class ReportService:
         source_employee_ids: list[int] | None = None,
     ):
         roles = user_roles(user)
+        require_reviewer_role(roles)
         if kind in {"MY_PAYSLIP", "PAYROLL_SUMMARY"}:
             if kind == "MY_PAYSLIP" and department_id is not None:
                 raise HTTPException(status_code=403, detail="AI_ACCESS_DENIED")
