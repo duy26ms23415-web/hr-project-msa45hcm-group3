@@ -93,19 +93,21 @@ export const EmployeesPage: React.FC = () => {
     if (!isAdmin || !employee.has_login_account || DEMO_EMAILS.has(employee.email.toLowerCase())) return;
     Modal.confirm({
       title: 'Xóa tài khoản đăng nhập?',
-      content: `Nhân viên: ${employee.full_name} (${employee.email}). Tài khoản sẽ bị xóa và không thể đăng nhập. Hồ sơ nhân viên và lịch sử chấm công được giữ lại.`,
+      content: `Nhân viên: ${employee.full_name} (${employee.email}). Tài khoản sẽ bị xóa và không thể đăng nhập. Nhân viên sẽ không còn hiển thị trong danh sách. Hồ sơ và lịch sử chấm công được giữ lại.`,
       okText: 'Xóa tài khoản',
       okButtonProps: { danger: true },
       cancelText: 'Hủy',
       onOk: async () => {
         try {
           await api.delete(`/employees/${employee.employee_id}/account`);
-          message.success('Đã xóa tài khoản đăng nhập. Hồ sơ nhân viên được giữ lại.');
-          fetchEmployees();
+          setEmployees((current) => current.filter((item) => item.employee_id !== employee.employee_id));
+          message.success('Đã xóa tài khoản và ẩn nhân viên khỏi danh sách.');
+          await fetchEmployees();
         } catch (err: any) {
           if (err.response?.status === 404) {
-            message.info('Nhân viên không còn tài khoản đăng nhập. Hồ sơ nhân viên vẫn được giữ lại.');
-            fetchEmployees();
+            setEmployees((current) => current.filter((item) => item.employee_id !== employee.employee_id));
+            message.info('Tài khoản đã được xóa. Nhân viên không còn hiển thị trong danh sách.');
+            await fetchEmployees();
             return;
           }
           const detail = err.response?.data?.detail;
@@ -125,8 +127,9 @@ export const EmployeesPage: React.FC = () => {
   const fetchEmployees = async () => {
     try {
       setLoading(true);
-      const res = await api.get('/employees');
-      setEmployees(res.data);
+      const res = await api.get<Employee[]>('/employees');
+      // Keep profile data in the API for attendance history; show login accounts here.
+      setEmployees(res.data.filter((employee) => employee.has_login_account));
     } catch (e) {
       console.error(e);
       setEmployees([]);
