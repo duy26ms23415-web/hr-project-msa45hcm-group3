@@ -77,7 +77,7 @@ export const EmployeesPage: React.FC = () => {
         }),
       };
       await api.patch(`/employees/${editingEmployee.employee_id}`, payload);
-      message.success('Đã cập nhật thông tin nhân viên và tài khoản đăng nhập.');
+      message.success(!editingEmployee.has_login_account && values.new_password ? 'Đã cập nhật hồ sơ và tạo tài khoản đăng nhập với quyền Nhân viên.' : 'Đã cập nhật thông tin nhân viên.');
       setEditingEmployee(null);
       editForm.resetFields();
       fetchEmployees();
@@ -90,7 +90,7 @@ export const EmployeesPage: React.FC = () => {
   };
 
   const confirmDeleteAccount = (employee: Employee) => {
-    if (!isAdmin || DEMO_EMAILS.has(employee.email.toLowerCase())) return;
+    if (!isAdmin || !employee.has_login_account || DEMO_EMAILS.has(employee.email.toLowerCase())) return;
     Modal.confirm({
       title: 'Xóa tài khoản đăng nhập?',
       content: `Nhân viên: ${employee.full_name} (${employee.email}). Tài khoản sẽ bị xóa và không thể đăng nhập. Hồ sơ nhân viên và lịch sử chấm công được giữ lại.`,
@@ -103,6 +103,11 @@ export const EmployeesPage: React.FC = () => {
           message.success('Đã xóa tài khoản đăng nhập. Hồ sơ nhân viên được giữ lại.');
           fetchEmployees();
         } catch (err: any) {
+          if (err.response?.status === 404) {
+            message.info('Nhân viên không còn tài khoản đăng nhập. Hồ sơ nhân viên vẫn được giữ lại.');
+            fetchEmployees();
+            return;
+          }
           const detail = err.response?.data?.detail;
           message.error(typeof detail === 'string' ? detail : 'Không xóa được tài khoản. Vui lòng thử lại.');
           throw err;
@@ -249,6 +254,15 @@ export const EmployeesPage: React.FC = () => {
           locale={{ emptyText: isAdminOrHR ? 'Chưa có nhân viên' : 'Chưa có nhân viên được phân công cho bạn' }}
           columns={[
             ...(isAdmin ? [{
+              title: 'Tài khoản đăng nhập',
+              key: 'login_account_status',
+              render: (_: unknown, record: Employee) => (
+                <Tag color={record.has_login_account ? 'blue' : 'default'}>
+                  {record.has_login_account ? 'Có tài khoản' : 'Chưa có tài khoản'}
+                </Tag>
+              ),
+            }] : []),
+            ...(isAdmin ? [{
               title: 'Thao tác',
               key: 'edit_employee',
               render: (_: unknown, record: Employee) => (
@@ -265,7 +279,7 @@ export const EmployeesPage: React.FC = () => {
                 }}>
                   Cập nhật nhân viên
                 </Button>
-                {!DEMO_EMAILS.has(record.email.toLowerCase()) && (
+                {record.has_login_account && !DEMO_EMAILS.has(record.email.toLowerCase()) && (
                   <Button size="small" danger icon={<DeleteOutlined />} onClick={() => confirmDeleteAccount(record)}>
                     Xóa tài khoản
                   </Button>
@@ -348,6 +362,7 @@ export const EmployeesPage: React.FC = () => {
           width={600}
         >
           <p>Mã nhân viên: <b>{editingEmployee?.employee_code}</b></p>
+          {editingEmployee && !editingEmployee.has_login_account && <p>Nhân viên chưa có tài khoản đăng nhập. Nhập mật khẩu mới để tạo tài khoản với quyền Nhân viên, hoặc để trống để chỉ cập nhật hồ sơ.</p>}
           {editingDemo && <p>Tài khoản demo: giữ nguyên email, mật khẩu và trạng thái đăng nhập.</p>}
           <Form form={editForm} layout="vertical" onFinish={handleUpdateEmployee} disabled={savingEmployee}>
             <Form.Item name="full_name" label="Họ và tên" rules={[{ required: true, whitespace: true, max: 200, message: 'Vui lòng nhập họ tên, tối đa 200 ký tự.' }]}>
@@ -381,7 +396,7 @@ export const EmployeesPage: React.FC = () => {
               ]} />
             </Form.Item>
             {!editingDemo && <>
-              <Form.Item name="new_password" label="Mật khẩu mới (tùy chọn)" extra="Để trống để giữ nguyên mật khẩu hiện tại." rules={[
+              <Form.Item name="new_password" label="Mật khẩu mới (tùy chọn)" extra={editingEmployee?.has_login_account ? "Để trống để giữ nguyên mật khẩu hiện tại." : "Nhập mật khẩu để tạo tài khoản đăng nhập bằng email ở trên."} rules={[
                 { min: 8, message: 'Mật khẩu cần ít nhất 8 ký tự.' },
                 { validator: (_, value) => !value || new TextEncoder().encode(value).length <= 72 ? Promise.resolve() : Promise.reject(new Error('Mật khẩu không được vượt quá 72 byte UTF-8.')) },
               ]}>

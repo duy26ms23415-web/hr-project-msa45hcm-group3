@@ -28,7 +28,8 @@ async def list_employees(
     """List employees within the current user's scope, with optional filters."""
     stmt = select(Employee).options(
         selectinload(Employee.department),
-        selectinload(Employee.position)
+        selectinload(Employee.position),
+        selectinload(Employee.user_account)
     )
     user_roles = {assignment.role.role_code for assignment in current_user.role_assignments}
     if not user_roles.intersection({"ADMIN", "HR"}):
@@ -131,7 +132,8 @@ async def create_employee(
     # Reload with relationships
     stmt_load = select(Employee).where(Employee.employee_id == emp.employee_id).options(
         selectinload(Employee.department),
-        selectinload(Employee.position)
+        selectinload(Employee.position),
+        selectinload(Employee.user_account)
     )
     loaded_emp = (await db.execute(stmt_load)).scalar_one()
     return loaded_emp
@@ -146,7 +148,8 @@ async def get_employee(
     """Get single employee profile by ID"""
     stmt = select(Employee).where(Employee.employee_id == employee_id).options(
         selectinload(Employee.department),
-        selectinload(Employee.position)
+        selectinload(Employee.position),
+        selectinload(Employee.user_account)
     )
     emp = (await db.execute(stmt)).scalar_one_or_none()
     if not emp:
@@ -194,8 +197,19 @@ async def update_employee(
         or ("employment_status" in update_data and update_data["employment_status"] != emp.employment_status)
     ):
         raise HTTPException(status_code=400, detail="Không được đổi email, mật khẩu hoặc trạng thái của tài khoản demo")
+    employee_role = None
     if emp_update.new_password is not None and not account:
-        raise HTTPException(status_code=400, detail="Nhân viên chưa có tài khoản đăng nhập")
+        login_email = str(update_data.get("email", emp.email))
+        existing_login = (await db.execute(
+            select(UserAccount).where(UserAccount.login_email == login_email)
+        )).scalar_one_or_none()
+        if existing_login:
+            raise HTTPException(status_code=409, detail="Email đăng nhập đã tồn tại")
+        employee_role = (await db.execute(
+            select(Role).where(Role.role_code == "EMPLOYEE")
+        )).scalar_one_or_none()
+        if not employee_role:
+            raise HTTPException(status_code=400, detail="Chưa có quyền EMPLOYEE. Vui lòng khởi tạo dữ liệu mẫu.")
     if "email" in update_data:
         email = str(update_data["email"])
         if not is_demo and email.lower() in DEMO_EMAILS:
@@ -262,6 +276,19 @@ async def update_employee(
                 account.is_active = update_data["employment_status"] == "ACTIVE"
             if emp_update.new_password is not None:
                 account.password_hash = get_password_hash(emp_update.new_password)
+        elif emp_update.new_password is not None:
+            account = UserAccount(
+                employee_id=emp.employee_id,
+                login_email=str(emp.email),
+                password_hash=get_password_hash(emp_update.new_password),
+                is_active=emp.employment_status == "ACTIVE",
+            )
+            db.add(account)
+            await db.flush()
+            db.add(UserRoleAssignment(
+                user_account_id=account.user_account_id,
+                role_id=employee_role.role_id,
+            ))
         await db.commit()
     except IntegrityError:
         await db.rollback()
@@ -270,7 +297,8 @@ async def update_employee(
     # Reload with relationships
     stmt_load = select(Employee).where(Employee.employee_id == employee_id).options(
         selectinload(Employee.department),
-        selectinload(Employee.position)
+        selectinload(Employee.position),
+        selectinload(Employee.user_account)
     )
     loaded_emp = (await db.execute(stmt_load)).scalar_one()
     return loaded_emp

@@ -1,6 +1,6 @@
 from datetime import date, datetime
 from typing import Optional
-from pydantic import BaseModel, EmailStr, ConfigDict, Field, field_validator
+from pydantic import BaseModel, EmailStr, ConfigDict, Field, field_validator, AliasChoices, AliasPath
 
 
 # Department Schemas
@@ -114,6 +114,16 @@ class EmployeeResponse(EmployeeBase):
     model_config = ConfigDict(from_attributes=True)
 
     employee_id: int
+    has_login_account: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("has_login_account", AliasPath("user_account", "user_account_id")),
+    )
+
+    @field_validator("has_login_account", mode="before")
+    @classmethod
+    def account_exists(cls, value) -> bool:
+        return bool(value)
+
     created_at: datetime
     updated_at: datetime
     department: Optional[DepartmentResponse] = None
