@@ -155,7 +155,10 @@ async def get_employee(
         )
     user_roles = {assignment.role.role_code for assignment in current_user.role_assignments}
     if not user_roles.intersection({"ADMIN", "HR"}):
-        if current_user.employee_id is None or emp.manager_employee_id != current_user.employee_id:
+        if current_user.employee_id is None or (
+            emp.employee_id != current_user.employee_id
+            and emp.manager_employee_id != current_user.employee_id
+        ):
             raise HTTPException(status_code=404, detail="Không tìm thấy nhân viên")
     return emp
 

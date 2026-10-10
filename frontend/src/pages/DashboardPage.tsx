@@ -21,7 +21,7 @@ const { Title, Text, Paragraph } = Typography;
 export const DashboardPage: React.FC = () => {
   const { user, hasRole } = useAuth();
   const navigate = useNavigate();
-  const isAdmin = hasRole(['ADMIN']);
+  const showEmployeeIdentity = hasRole(['ADMIN', 'MANAGER']);
   const [employeesById, setEmployeesById] = useState<Record<number, Employee>>({});
   const [balance, setBalance] = useState<LeaveBalance | null>(null);
   const [todayRecord, setTodayRecord] = useState<AttendanceRecord | null>(null);
@@ -36,13 +36,20 @@ export const DashboardPage: React.FC = () => {
       const balRes = await api.get('/leaves/balances/me').catch(() => null);
       if (balRes) setBalance(balRes.data);
 
-      if (isAdmin) {
-        const employeesRes = await api.get<Employee[]>('/employees').catch(() => null);
-        if (employeesRes) {
-          setEmployeesById(Object.fromEntries(
-            employeesRes.data.map((employee) => [employee.employee_id, employee])
-          ));
-        }
+      if (showEmployeeIdentity) {
+        const [employeesRes, ownProfileRes] = await Promise.all([
+          api.get<Employee[]>('/employees').catch(() => null),
+          hasRole(['MANAGER']) && user?.employee_id != null
+            ? api.get<Employee>(`/employees/${user.employee_id}`).catch(() => null)
+            : Promise.resolve(null),
+        ]);
+        const profiles = [
+          ...(employeesRes?.data || []),
+          ...(ownProfileRes ? [ownProfileRes.data] : []),
+        ];
+        setEmployeesById(Object.fromEntries(
+          profiles.map((employee) => [employee.employee_id, employee])
+        ));
       }
 
       // Fetch attendance records
@@ -75,7 +82,7 @@ export const DashboardPage: React.FC = () => {
 
   useEffect(() => {
     fetchData();
-  }, [isAdmin]);
+  }, [showEmployeeIdentity, user?.employee_id]);
 
   const formatHours = (minutes: number) => {
     const h = Math.floor(minutes / 60);
@@ -313,7 +320,7 @@ export const DashboardPage: React.FC = () => {
           pagination={false}
           size="middle"
           columns={[
-            ...(isAdmin ? [
+            ...(showEmployeeIdentity ? [
               {
                 title: 'Họ và tên',
                 key: 'employee_full_name',
