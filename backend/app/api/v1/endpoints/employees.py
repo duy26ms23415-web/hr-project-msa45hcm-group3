@@ -24,11 +24,16 @@ async def list_employees(
     db: AsyncSession = Depends(get_db),
     current_user: UserAccount = Depends(require_roles(["HR", "ADMIN", "MANAGER"]))
 ):
-    """List employees with optional department and status filtering"""
+    """List employees within the current user's scope, with optional filters."""
     stmt = select(Employee).options(
         selectinload(Employee.department),
         selectinload(Employee.position)
     )
+    user_roles = {assignment.role.role_code for assignment in current_user.role_assignments}
+    if not user_roles.intersection({"ADMIN", "HR"}):
+        if current_user.employee_id is None:
+            return []
+        stmt = stmt.where(Employee.manager_employee_id == current_user.employee_id)
     if department_id:
         stmt = stmt.where(Employee.department_id == department_id)
     if status_filter:
@@ -148,6 +153,10 @@ async def get_employee(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Không tìm thấy nhân viên"
         )
+    user_roles = {assignment.role.role_code for assignment in current_user.role_assignments}
+    if not user_roles.intersection({"ADMIN", "HR"}):
+        if current_user.employee_id is None or emp.manager_employee_id != current_user.employee_id:
+            raise HTTPException(status_code=404, detail="Không tìm thấy nhân viên")
     return emp
 
 

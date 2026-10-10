@@ -31,7 +31,7 @@ import type { Employee, QRCard } from '../types';
 const { Title, Text } = Typography;
 
 export const EmployeesPage: React.FC = () => {
-  const { user, hasRole } = useAuth();
+  const { hasRole } = useAuth();
   const isAdminOrHR = hasRole(['ADMIN', 'HR']);
 
   const [employees, setEmployees] = useState<Employee[]>([]);
@@ -57,6 +57,8 @@ export const EmployeesPage: React.FC = () => {
       setEmployees(res.data);
     } catch (e) {
       console.error(e);
+      setEmployees([]);
+      message.error('Không tải được danh sách nhân viên. Vui lòng thử lại.');
     } finally {
       setLoading(false);
     }
@@ -78,8 +80,8 @@ export const EmployeesPage: React.FC = () => {
 
   useEffect(() => {
     fetchEmployees();
-    fetchMetadata();
-  }, []);
+    if (isAdminOrHR) fetchMetadata();
+  }, [isAdminOrHR]);
 
   const handleCreateEmployee = async (values: any) => {
     setSubmitting(true);
@@ -143,9 +145,11 @@ export const EmployeesPage: React.FC = () => {
       {/* Header bar */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
         <div>
-          <Title level={4} style={{ margin: 0 }}>Quản lý Nhân sự & Thẻ QR</Title>
+          <Title level={4} style={{ margin: 0 }}>{isAdminOrHR ? 'Quản lý Nhân sự & Thẻ QR' : 'Nhân viên của tôi'}</Title>
           <Text type="secondary" style={{ fontSize: 13 }}>
-            Danh sách nhân sự • Thẻ QR vật lý tĩnh để quẹt tại máy Kiosk
+            {isAdminOrHR
+              ? 'Danh sách toàn bộ nhân viên • Thẻ QR vật lý tĩnh để quẹt tại máy Kiosk'
+              : 'Danh sách nhân viên do bạn quản lý trực tiếp'}
           </Text>
         </div>
 
@@ -175,6 +179,7 @@ export const EmployeesPage: React.FC = () => {
           dataSource={employees}
           rowKey="employee_id"
           loading={loading}
+          locale={{ emptyText: isAdminOrHR ? 'Chưa có nhân viên' : 'Chưa có nhân viên được phân công cho bạn' }}
           columns={[
             {
               title: 'Mã NV',
