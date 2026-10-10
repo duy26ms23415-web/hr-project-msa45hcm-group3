@@ -95,3 +95,14 @@ class EmployeeResponse(EmployeeBase):
     updated_at: datetime
     department: Optional[DepartmentResponse] = None
     position: Optional[PositionResponse] = None
+
+
+class EmployeePasswordReset(BaseModel):
+    new_password: str = Field(min_length=8, max_length=72, repr=False)
+
+    @field_validator("new_password")
+    @classmethod
+    def validate_password_bytes(cls, value: str) -> str:
+        if len(value.encode("utf-8")) > 72:
+            raise ValueError("Mật khẩu không được vượt quá 72 byte UTF-8")
+        return value

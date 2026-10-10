@@ -1,7 +1,7 @@
 from datetime import date
 from typing import List, Optional
 # pyrefly: ignore [missing-import]
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Response
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
@@ -12,7 +12,7 @@ from app.api.deps import require_roles
 from app.models.auth import UserAccount, Role, UserRoleAssignment
 from app.core.security import get_password_hash
 from app.models.organization import Employee, Department, Position
-from app.schemas.organization import EmployeeCreate, EmployeeUpdate, EmployeeResponse
+from app.schemas.organization import EmployeeCreate, EmployeeUpdate, EmployeeResponse, EmployeePasswordReset
 
 router = APIRouter()
 
@@ -257,3 +257,26 @@ async def deactivate_employee(
     )
     loaded_emp = (await db.execute(stmt_load)).scalar_one()
     return loaded_emp
+
+
+@router.post("/{employee_id}/password", status_code=status.HTTP_204_NO_CONTENT)
+async def reset_employee_password(
+    employee_id: int,
+    password_in: EmployeePasswordReset,
+    db: AsyncSession = Depends(get_db),
+    current_user: UserAccount = Depends(require_roles(["ADMIN"]))
+):
+    """Allow an administrator to set a new password on an existing employee account."""
+    account = (await db.execute(
+        select(UserAccount).where(UserAccount.employee_id == employee_id)
+    )).scalar_one_or_none()
+    if not account:
+        raise HTTPException(status_code=404, detail="Nhân viên chưa có tài khoản đăng nhập")
+
+    demo_emails = {"admin@hrgroup3.com", "manager@hrgroup3.com", "employee@hrgroup3.com"}
+    if account.login_email.lower() in demo_emails:
+        raise HTTPException(status_code=400, detail="Không được đổi mật khẩu của tài khoản demo")
+
+    account.password_hash = get_password_hash(password_in.new_password)
+    await db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

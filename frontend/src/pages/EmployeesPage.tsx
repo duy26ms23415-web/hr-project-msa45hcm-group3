@@ -16,6 +16,7 @@ import {
 } from 'antd';
 import {
   UserAddOutlined,
+  LockOutlined,
   QrcodeOutlined,
   TeamOutlined,
   MailOutlined,
@@ -29,9 +30,11 @@ import api from '../api/client';
 import type { Employee, QRCard } from '../types';
 
 const { Title, Text } = Typography;
+const DEMO_EMAILS = new Set(['admin@hrgroup3.com', 'manager@hrgroup3.com', 'employee@hrgroup3.com']);
 
 export const EmployeesPage: React.FC = () => {
   const { hasRole } = useAuth();
+  const isAdmin = hasRole(['ADMIN']);
   const isAdminOrHR = hasRole(['ADMIN', 'HR']);
 
   const [employees, setEmployees] = useState<Employee[]>([]);
@@ -43,6 +46,34 @@ export const EmployeesPage: React.FC = () => {
   const [addModalOpen, setAddModalOpen] = useState(false);
   const [form] = Form.useForm();
   const [submitting, setSubmitting] = useState(false);
+
+  const [passwordEmployee, setPasswordEmployee] = useState<Employee | null>(null);
+  const [passwordForm] = Form.useForm();
+  const [savingPassword, setSavingPassword] = useState(false);
+
+  const closePasswordModal = () => {
+    if (savingPassword) return;
+    setPasswordEmployee(null);
+    passwordForm.resetFields();
+  };
+
+  const handleResetPassword = async (values: { new_password: string }) => {
+    if (!isAdmin || !passwordEmployee || savingPassword) return;
+    setSavingPassword(true);
+    try {
+      await api.post(`/employees/${passwordEmployee.employee_id}/password`, {
+        new_password: values.new_password,
+      });
+      message.success('Đã cập nhật mật khẩu đăng nhập của nhân viên.');
+      setPasswordEmployee(null);
+      passwordForm.resetFields();
+    } catch (err: any) {
+      const detail = err.response?.data?.detail;
+      message.error(typeof detail === 'string' ? detail : 'Không đổi được mật khẩu. Vui lòng thử lại.');
+    } finally {
+      setSavingPassword(false);
+    }
+  };
 
   // QR Modal
   const [qrModalOpen, setQrModalOpen] = useState(false);
@@ -181,6 +212,20 @@ export const EmployeesPage: React.FC = () => {
           loading={loading}
           locale={{ emptyText: isAdminOrHR ? 'Chưa có nhân viên' : 'Chưa có nhân viên được phân công cho bạn' }}
           columns={[
+            ...(isAdmin ? [{
+              title: 'Tài khoản',
+              key: 'password',
+              render: (_: unknown, record: Employee) => DEMO_EMAILS.has(record.email.toLowerCase()) ? (
+                <Text type="secondary">Tài khoản demo</Text>
+              ) : (
+                <Button size="small" icon={<LockOutlined />} onClick={() => {
+                  passwordForm.resetFields();
+                  setPasswordEmployee(record);
+                }}>
+                  Đổi/đặt lại mật khẩu
+                </Button>
+              ),
+            }] : []),
             {
               title: 'Mã NV',
               dataIndex: 'employee_code',
@@ -243,6 +288,60 @@ export const EmployeesPage: React.FC = () => {
           ]}
         />
       </Card>
+
+      {isAdmin && (
+        <Modal
+          open={passwordEmployee !== null}
+          title="Đổi/đặt lại mật khẩu"
+          onCancel={closePasswordModal}
+          footer={null}
+          closable={!savingPassword}
+          maskClosable={!savingPassword}
+          keyboard={!savingPassword}
+          width={480}
+        >
+          <p>Nhân viên: <b>{passwordEmployee?.full_name}</b> ({passwordEmployee?.email})</p>
+          <Form form={passwordForm} layout="vertical" onFinish={handleResetPassword}>
+            <Form.Item
+              name="new_password"
+              label="Mật khẩu mới"
+              extra="Nhân viên dùng mật khẩu này cho lần đăng nhập tiếp theo."
+              rules={[
+                { required: true, message: 'Vui lòng nhập mật khẩu mới!' },
+                { min: 8, message: 'Mật khẩu cần ít nhất 8 ký tự.' },
+                {
+                  validator: (_, value) =>
+                    !value || new TextEncoder().encode(value).length <= 72
+                      ? Promise.resolve()
+                      : Promise.reject(new Error('Mật khẩu không được vượt quá 72 byte UTF-8.')),
+                },
+              ]}
+            >
+              <Input.Password autoComplete="new-password" disabled={savingPassword} />
+            </Form.Item>
+            <Form.Item
+              name="confirm_password"
+              label="Nhập lại mật khẩu mới"
+              dependencies={['new_password']}
+              rules={[
+                { required: true, message: 'Vui lòng nhập lại mật khẩu!' },
+                ({ getFieldValue }) => ({
+                  validator: (_, value) =>
+                    !value || value === getFieldValue('new_password')
+                      ? Promise.resolve()
+                      : Promise.reject(new Error('Mật khẩu nhập lại không khớp.')),
+                }),
+              ]}
+            >
+              <Input.Password autoComplete="new-password" disabled={savingPassword} />
+            </Form.Item>
+            <Space>
+              <Button onClick={closePasswordModal} disabled={savingPassword}>Hủy</Button>
+              <Button type="primary" htmlType="submit" loading={savingPassword}>Lưu mật khẩu mới</Button>
+            </Space>
+          </Form>
+        </Modal>
+      )}
 
       {/* Modal Add Employee */}
       <Modal
