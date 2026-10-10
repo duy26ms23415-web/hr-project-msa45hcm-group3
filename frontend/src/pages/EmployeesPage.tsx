@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Card,
   Table,
@@ -123,6 +123,15 @@ export const EmployeesPage: React.FC = () => {
   const [selectedEmployee, setSelectedEmployee] = useState<Employee | null>(null);
   const [qrCard, setQrCard] = useState<any | null>(null);
   const [loadingQr, setLoadingQr] = useState(false);
+  const [qrError, setQrError] = useState<string | null>(null);
+  const qrRequestRef = useRef(0);
+
+  const closeQrModal = () => {
+    qrRequestRef.current += 1;
+    setQrModalOpen(false);
+    setQrCard(null);
+    setLoadingQr(false);
+  };
 
   const fetchEmployees = async () => {
     try {
@@ -194,24 +203,30 @@ export const EmployeesPage: React.FC = () => {
   };
 
   const handleViewQR = async (emp: Employee) => {
+    const requestId = ++qrRequestRef.current;
     setSelectedEmployee(emp);
+    setQrCard(null);
+    setQrError(null);
     setQrModalOpen(true);
     setLoadingQr(true);
     try {
-      const res = await api.get(`/attendance/employees/${emp.employee_id}/qr-cards`);
-      if (res.data && res.data.length > 0) {
-        setQrCard(res.data[0]);
-      } else {
-        // Generate on demand if none exists
-        const createRes = await api.post(`/attendance/employees/${emp.employee_id}/qr-cards`, {
-          qr_code_value: `${emp.employee_code}_QR_STATIC`,
-        });
-        setQrCard(createRes.data);
+      const res = await api.get<QRCard[]>(`/attendance/employees/${emp.employee_id}/qr-cards`);
+      if (requestId !== qrRequestRef.current) return;
+      const card = res.data.find((item) =>
+        item.employee_id === emp.employee_id && !item.revoked_at &&
+        (!item.expires_at || dayjs(item.expires_at).isAfter(dayjs()))
+      );
+      if (!card?.card_code) {
+        setQrError('Chưa có mã QR hợp lệ để hiển thị. Vui lòng kiểm tra thẻ đã cấp.');
+        return;
       }
-    } catch (err) {
-      console.error(err);
+      setQrCard(card);
+    } catch (err: any) {
+      if (requestId !== qrRequestRef.current) return;
+      const detail = err.response?.data?.detail;
+      setQrError(typeof detail === 'string' ? detail : 'Không tải được thẻ QR. Vui lòng thử lại.');
     } finally {
-      setLoadingQr(false);
+      if (requestId === qrRequestRef.current) setLoadingQr(false);
     }
   };
 
@@ -534,7 +549,7 @@ export const EmployeesPage: React.FC = () => {
       {/* Modal View QR Card */}
       <Modal
         open={qrModalOpen}
-        onCancel={() => setQrModalOpen(false)}
+        onCancel={closeQrModal}
         footer={null}
         width={380}
         styles={{ body: { textAlign: 'center', padding: '28px 24px' } }}
@@ -546,11 +561,9 @@ export const EmployeesPage: React.FC = () => {
         </div>
 
         {(() => {
-          const qrCodeValue =
-            qrCard?.card_code ||
-            qrCard?.qr_code_value ||
-            qrCard?.raw_token ||
-            (selectedEmployee ? `${selectedEmployee.employee_code}_QR_STATIC` : '');
+          const qrCodeValue = !loadingQr && qrCard?.employee_id === selectedEmployee?.employee_id
+            ? qrCard?.card_code || ''
+            : '';
 
           return (
             <>
@@ -568,7 +581,7 @@ export const EmployeesPage: React.FC = () => {
                   <QRCodeSVG value={qrCodeValue} size={180} />
                 ) : (
                   <div style={{ width: 180, height: 180, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    Đang tải mã QR...
+                    {loadingQr ? 'Đang tải mã QR...' : qrError || 'Chưa có mã QR hợp lệ.'}
                   </div>
                 )}
               </div>
@@ -577,14 +590,14 @@ export const EmployeesPage: React.FC = () => {
                 <div>Họ tên: <b>{selectedEmployee?.full_name}</b></div>
                 <div>Mã nhân viên: <b>{selectedEmployee?.employee_code}</b></div>
                 <div>Mã thẻ QR: <code style={{ color: '#1677ff', fontWeight: 600 }}>{qrCodeValue}</code></div>
-                <div style={{ marginTop: 4 }}>Trạng thái: <Tag color="success">HOẠT ĐỘNG</Tag></div>
+                <div style={{ marginTop: 4 }}>Trạng thái: <Tag color={qrCodeValue ? 'success' : 'default'}>{qrCodeValue ? 'HOẠT ĐỘNG' : 'CHƯA SẴN SÀNG'}</Tag></div>
               </div>
             </>
           );
         })()}
 
         <div style={{ marginTop: 20 }}>
-          <Button type="primary" block onClick={() => setQrModalOpen(false)}>
+          <Button type="primary" block onClick={closeQrModal}>
             Đóng
           </Button>
         </div>
