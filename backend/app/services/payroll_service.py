@@ -30,16 +30,24 @@ class PayrollService:
     @staticmethod
     def calculate_insurance(gross_salary: Decimal) -> Tuple[Decimal, Decimal, Decimal, Decimal]:
         """
-        Calculate mandatory insurance in Vietnam:
-        BHXH: 8%, BHYT: 1.5%, BHTN: 1%
-        Returns (bhxh, bhyt, bhtn, total_insurance)
+        Mandatory statutory insurance deduction under Vietnamese Labor Law (2026 Regulations):
+        - Social Insurance / BHXH (8%) & Health Insurance / BHYT (1.5%): Capped at 20 times the reference level
+          (20 * 2,530,000 = 50,600,000 VND) pursuant to Decree 161/2026/ND-CP and Social Insurance Law 2024.
+        - Unemployment Insurance / BHTN (1%): Capped at 20 times the Region I minimum wage
+          (20 * 5,310,000 = 106,200,000 VND) pursuant to Decree 293/2025/ND-CP and Employment Law 2025.
+        Returns: (bhxh, bhyt, bhtn, total_insurance)
         """
-        # Statutory cap is 20 * base salary (46,800,000 VND)
-        capped_salary = min(gross_salary, Decimal("46800000.00"))
-        
-        bhxh = (capped_salary * Decimal("0.08")).quantize(Decimal("1.00"), rounding=ROUND_HALF_UP)
-        bhyt = (capped_salary * Decimal("0.015")).quantize(Decimal("1.00"), rounding=ROUND_HALF_UP)
-        bhtn = (gross_salary * Decimal("0.01")).quantize(Decimal("1.00"), rounding=ROUND_HALF_UP)
+        # [2026 Statutory Cap] BHXH & BHYT ceiling: 20x reference level (2,530,000 VND) = 50,600,000 VND
+        bhxh_bhyt_cap = Decimal("50600000.00")
+        salary_for_bhxh_bhyt = min(gross_salary, bhxh_bhyt_cap)
+
+        # [2026 Statutory Cap] BHTN ceiling: 20x Region I minimum wage (5,310,000 VND) = 106,200,000 VND
+        bhtn_cap = Decimal("106200000.00")
+        salary_for_bhtn = min(gross_salary, bhtn_cap)
+
+        bhxh = (salary_for_bhxh_bhyt * Decimal("0.08")).quantize(Decimal("1.00"), rounding=ROUND_HALF_UP)
+        bhyt = (salary_for_bhxh_bhyt * Decimal("0.015")).quantize(Decimal("1.00"), rounding=ROUND_HALF_UP)
+        bhtn = (salary_for_bhtn * Decimal("0.01")).quantize(Decimal("1.00"), rounding=ROUND_HALF_UP)
         total_insurance = bhxh + bhyt + bhtn
         return bhxh, bhyt, bhtn, total_insurance
 
@@ -193,8 +201,8 @@ class PayrollService:
                 att = att_days.get(d)
                 if att and att.attendance_status == "PRESENT":
                     actual_paid_days += Decimal("1.0")
-                elif att and att.attendance_status == "ON_LEAVE":
-                    # Leave count will be added from paid leaves sum
+                elif att and att.attendance_status in ("ON_LEAVE", "REMOTE"):
+                    # Leave/Remote count will be added from paid leaves sum
                     pass
 
             actual_paid_days += Decimal(str(paid_leave_days))

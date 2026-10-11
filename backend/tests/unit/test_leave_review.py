@@ -22,7 +22,7 @@ async def test_concurrent_reviews_only_apply_first_decision(second_status):
     request = SimpleNamespace(
         leave_request_id=1, employee_id=7, status="PENDING",
         leave_date=date(2026, 10, 12), leave_days=Decimal("1.00"),
-        leave_type=SimpleNamespace(is_paid=True),
+        leave_type=SimpleNamespace(is_paid=True, leave_code="ANNUAL"),
     )
     balance = SimpleNamespace(
         used_days=Decimal("0.00"), remaining_days=Decimal("12.00"),

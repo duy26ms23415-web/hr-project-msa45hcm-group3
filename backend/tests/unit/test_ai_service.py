@@ -775,3 +775,53 @@ async def test_reason_turn_completes_leave_without_changing_date_or_session(cont
     assert result.action.action_type == "DRAFT_LEAVE"
     assert result.action.data == {**draft.typed_params, "reason": reason}
     assert update.await_args.args[3:] == ({"reason": reason}, [])
+
+
+@pytest.mark.parametrize("message, expected", [
+    ("Xin làm việc từ xa ngày mai", "REMOTE"),
+    ("Xin WFH sáng mai", "REMOTE"),
+    ("Tạo đơn Remote", "REMOTE"),
+    ("Xin nghỉ phép năm vì hôm qua làm việc từ xa", "ANNUAL"),
+])
+def test_remote_type_detection_preserves_reason_boundary(message, expected):
+    assert AIService._requested_leave_code(message) == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("message", ["Xin làm việc từ xa ngày mai", "Xin WFH sáng mai", "Tạo đơn Remote ngày mai"])
+async def test_remote_draft_selects_active_type_without_annual_quota(monkeypatch, message):
+    from decimal import Decimal
+    from app.services.ai_draft_service import AIDraftService
+    db = AsyncMock()
+    remote = SimpleNamespace(leave_type_id=14, leave_code="REMOTE", leave_name="Remote")
+    type_result = SimpleNamespace(scalars=lambda: SimpleNamespace(all=lambda: [remote]))
+    db.execute.side_effect = [type_result,
+        SimpleNamespace(scalar_one_or_none=lambda: SimpleNamespace(remaining_days=Decimal("0.00"))), type_result]
+    create = AsyncMock(return_value=SimpleNamespace(draft_id="00000000-0000-4000-8000-000000000000", revision=1))
+    monkeypatch.setattr(AIDraftService, "create_draft", create)
+    result = await AIService.process_chat(db, 7, AIChatRequest(message=message), {"EMPLOYEE"}, owner_user_account_id=9)
+    assert result.draft_id is not None and result.action is None
+    assert result.message_code != "LEAVE_BALANCE_INSUFFICIENT"
+    assert create.await_args.args[3]["leave_type_id"] == 14
+    assert "reason" in result.missing_fields
+    assert "Làm việc từ xa" in result.reply
+
+
+@pytest.mark.asyncio
+async def test_remote_policy_uses_authorized_knowledge_without_creating_request(monkeypatch):
+    from app.services.ai_draft_service import AIDraftService
+    monkeypatch.setattr("app.services.ai_service.settings.GEMINI_ENABLED", False)
+    db = AsyncMock()
+    db.execute.return_value = SimpleNamespace(mappings=lambda: SimpleNamespace(all=lambda: [{
+        "document_id": 3, "title": "Chính sách Remote", "status": "PUBLISHED",
+        "content": "Làm việc từ xa (Remote) do quản lý trực tiếp duyệt và không trừ quỹ phép năm.",
+        "version_id": 5, "section_id": 8, "section_code": "LEAVE.REQUEST",
+        "heading": "Quy định Remote", "page_start": 3, "page_end": 3, "is_answerable": True,
+    }]))
+    create = AsyncMock(side_effect=AssertionError("Policy query must not create a request"))
+    monkeypatch.setattr(AIDraftService, "create_draft", create)
+    result = await AIService.process_chat(db, 7, AIChatRequest(message="Quy định làm việc từ xa Remote có trừ phép năm không?"), {"EMPLOYEE"}, owner_user_account_id=9)
+    assert result.answer_mode == "RAG" and result.action is None and result.draft_id is None
+    assert "không trừ quỹ phép năm" in result.reply
+    assert result.sources[0].viewer_path == "/knowledge/view/3?version=5&section=8"
+    create.assert_not_awaited()

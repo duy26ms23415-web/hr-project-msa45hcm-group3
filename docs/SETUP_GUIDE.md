@@ -1,5 +1,7 @@
 # HƯỚNG DẪN CÀI ĐẶT & TRIỂN KHAI DỰ ÁN (PROJECT SETUP & DEPLOYMENT GUIDE)
 
+Phiên bản tích hợp Google SSO yêu cầu đồng bộ dependencies theo `backend/requirements.txt` (có `google-auth`) và `frontend/package-lock.json` (có `@react-oauth/google`; chạy `npm ci` tại frontend). Remote dùng schema hiện hữu, không có migration mới; seed có loại REMOTE và GET `/api/v1/leaves/types` bổ sung nếu thiếu. Nếu PostgreSQL chạy trong Docker/WSL, giữ phiên WSL hoạt động trong suốt kiểm thử để tránh DB tắt giữa chừng. Chạy lại `check_leave_integration.py` sau frontend build để kiểm tra phép năm, quyền duyệt và Remote trên DB tạm. Tài liệu Remote minh họa cần tạo lại bằng generator và HR rà soát/công bố trước khi RAG có thể trả lời; không tự sửa tài liệu đã công bố trong DB.
+
 Kiểm tra hồi quy hai parser tại backend bằng interpreter Conda hr-backend: `python -B -m pytest tests/unit/test_ai_service.py tests/unit/test_knowledge_storage.py -q`. Tests kiểm lý do có từ chỉ ngày/buổi/giờ vẫn giữ trường đã chọn, câu nhập gộp buổi/lý do, PDF XFA/action trong form/bookmark, bookmark an toàn và đồ thị có vòng lặp. Tests dùng mock/PDF trong bộ nhớ, không ghi DB hoặc gọi Gemini thật; không cần cấu hình, dependency hay migration mới.
 
 Để tiết kiệm quota, giữ `GEMINI_ENABLED=false` trong môi trường backend; có API key cũng không tự bật provider. Chỉ đặt true và khởi động lại backend khi muốn dùng Gemini cho yêu cầu ngoài fallback. Giới hạn đầu ra cố định 128/256/384 token, nguồn 4.000 ký tự, timeout 5 giây và không retry. Không cần dependency mới.

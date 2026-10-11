@@ -136,6 +136,8 @@ class AIService:
         text = normalize(message)
         # The reason is not evidence of the selected leave type.
         text = re.split(r"\b(?:ly do|boi vi|vi)\b", text, maxsplit=1)[0].strip()
+        if any(term in text for term in ("lam viec tu xa", "remote", "wfh")):
+            return "REMOTE"
         if "khong luong" in text or choosing_type and text == "unpaid":
             return "UNPAID"
         if any(term in text for term in ("nghi om", "phep om", "sick")) or choosing_type and text == "om":
@@ -513,7 +515,7 @@ class AIService:
                 return AIChatResponse(reply=f"Đã tạo báo cáo Excel từ dữ liệu đã ghi nhận, kỳ {start_date} đến {end_date}. Mở báo cáo để xem dữ liệu và tải file.", action=AIChatAction(action_type="OPEN_REPORT", data={"path": "/reports", "kind": report_kind, "start_date": start_date, "end_date": end_date, "scope": requested_scope, "run_id": result["run"].run_id}))
             return AIChatResponse(reply="Đã điền sẵn báo cáo và kỳ đã chọn. Hãy kiểm tra phạm vi, bộ lọc và dữ liệu trước khi tạo.", action=AIChatAction(action_type="OPEN_REPORT", data={"path": "/reports", "kind": report_kind, "start_date": start_date, "end_date": end_date}))
 
-        draft_leave = any(term in text for term in ["xin nghi", "nghi sang", "nghi chieu", "nghi ca ngay", "tao don nghi", "lap don nghi", "tao phep"])
+        draft_leave = any(term in text for term in ["xin nghi", "nghi sang", "nghi chieu", "nghi ca ngay", "tao don nghi", "lap don nghi", "tao phep", "xin lam viec tu xa", "dang ky lam viec tu xa", "xin remote", "xin wfh", "tao don remote", "tao don wfh"])
         draft_fix = any(term in text for term in ["quen quet", "quen cham cong", "quen check-in", "quen check-out", "tao giai trinh", "don giai trinh"]) and "ngay nao" not in text
         if owner_user_account_id is not None and db is not None and (draft_leave or draft_fix):
             command = "DRAFT_LEAVE" if draft_leave else "DRAFT_FIX"
@@ -546,7 +548,7 @@ class AIService:
                 if date_field in params:
                     known.append("Ngày đã chọn: " + date.fromisoformat(params[date_field]).strftime("%d/%m/%Y"))
                 if command == "DRAFT_LEAVE" and requested_code:
-                    known.append({"ANNUAL": "Phép năm", "SICK": "Nghỉ ốm", "UNPAID": "Nghỉ không lương"}[requested_code])
+                    known.append({"ANNUAL": "Phép năm", "SICK": "Nghỉ ốm", "UNPAID": "Nghỉ không lương", "REMOTE": "Làm việc từ xa"}[requested_code])
                 if known:
                     question = " · ".join(known) + ".\n" + question
                 return AIChatResponse(reply=question, draft_id=draft.draft_id, draft_revision=draft.revision, missing_fields=missing, message_code=f"{missing[0].upper()}_REQUIRED")

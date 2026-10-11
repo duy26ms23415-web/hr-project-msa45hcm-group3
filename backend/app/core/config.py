@@ -49,6 +49,10 @@ class Settings(BaseSettings):
     AI_KNOWLEDGE_MAX_UPLOAD_BYTES: int = 10 * 1024 * 1024
     REPORT_STORAGE_DIR: Path = Path(__file__).resolve().parents[2] / "storage" / "private" / "reports"
 
+    # Google Login
+    GOOGLE_CLIENT_ID: str = ""
+    GOOGLE_CLIENT_SECRET: str = ""
+
     # CORS
     CORS_ORIGINS: List[str] = ["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:3000"]
 

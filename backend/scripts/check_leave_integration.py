@@ -193,6 +193,42 @@ def main() -> None:
                 pending_id = response.json()["leave_request_id"]
                 for reviewer in (["staff", "other", "hr"] if role == "staff" else ["manager"]):
                     assert api(reviewer, "POST", f"/leaves/requests/{pending_id}/review", {"status": "REJECTED"}).status_code == 403
+            # REMOTE must remain available even with no annual leave left.
+            remote_type = next(item for item in types if item["leave_code"] == "REMOTE")
+            assert remote_type["is_paid"]
+            annual_type = next(item for item in types if item["leave_code"] == "ANNUAL")
+            with test_engine.begin() as conn:
+                conn.execute(text("UPDATE hr_employee_leave_balances SET used_days=12, remaining_days=0 WHERE employee_id=:id"), {"id": employees["staff"]})
+            remote_ids = []
+            for i, (session, decision, minutes) in enumerate([
+                ("FULL_DAY", "APPROVED", 480), ("MORNING", "APPROVED", 240), ("AFTERNOON", "REJECTED", 0),
+            ]):
+                remote_date = (date.today() + timedelta(days=50 + i)).isoformat()
+                payload = {"leave_type_id": remote_type["leave_type_id"], "leave_date": remote_date, "session": session}
+                response = api("staff", "POST", "/leaves/requests", payload)
+                assert response.status_code == 201
+                remote_id = response.json()["leave_request_id"]
+                remote_ids.append(remote_id)
+                assert api("other", "POST", f"/leaves/requests/{remote_id}/review", {"status": decision}).status_code == 403
+                reviewed = api("manager", "POST", f"/leaves/requests/{remote_id}/review", {"status": decision})
+                assert reviewed.status_code == 200 and reviewed.json()["status"] == decision
+                assert api("manager", "POST", f"/leaves/requests/{remote_id}/review", {"status": decision}).status_code == 400
+                with test_engine.connect() as conn:
+                    attendance = conn.execute(text("SELECT attendance_status, worked_minutes FROM hr_attendance_days WHERE employee_id=:id AND work_date=:day"), {"id": employees["staff"], "day": remote_date}).mappings().all()
+                    if decision == "APPROVED":
+                        assert len(attendance) == 1 and attendance[0]["attendance_status"] == "REMOTE"
+                        assert attendance[0]["worked_minutes"] == minutes
+                    else:
+                        assert not attendance
+            with test_engine.connect() as conn:
+                balance = conn.execute(text("SELECT used_days, remaining_days FROM hr_employee_leave_balances WHERE employee_id=:id"), {"id": employees["staff"]}).mappings().one()
+                assert balance["used_days"] == Decimal("12.00") and balance["remaining_days"] == Decimal("0.00")
+            blocked_annual = api("staff", "POST", "/leaves/requests", {
+                "leave_type_id": annual_type["leave_type_id"], "leave_date": (date.today() + timedelta(days=55)).isoformat(), "session": "FULL_DAY",
+            })
+            assert blocked_annual.status_code == 400
+            evidence["remote"] = "full/half day paid attendance, rejected request has no attendance; exhausted annual balance unchanged"
+            print("PASS: REMOTE full/half day approval/rejection with zero annual quota; annual leave still blocked", flush=True)
             evidence["ui"] = True
             evidence["authorization"] = "employee, unrelated manager, HR and self-review denied; duplicate review denied"
             print("PASS: real UI submission/approval/rejection; committed PostgreSQL balance/attendance; authorization", flush=True)

@@ -1,5 +1,7 @@
 # SOFTWARE ARCHITECTURE DOCUMENT (SAD)
 
+Remote/WFH dùng `LeaveType.leave_code=REMOTE` và luồng LeaveService hiện hữu: `/leaves/requests/{id}/review` giữ khóa dòng đơn, kiểm tra quản lý trực tiếp và cấm tự duyệt. Chỉ `ANNUAL` kiểm tra/trừ số dư; Remote ghi AttendanceDay trạng thái `REMOTE`, phút công theo buổi, được cộng vào ngày hưởng lương qua tổng đơn paid. AI ánh xạ từ khóa Remote/WFH vào loại đơn đang active; quy định không nằm trong system prompt tĩnh mà lấy từ knowledge đã công bố. Generator tài liệu minh họa có nội dung Remote ở LEAVE.REQUEST, vẫn tạo bản nháp chưa công bố.
+
 Parser nháp xử lý lượt thu thập reason trước bộ nhận dạng ngày/buổi/giờ; phần lý do được tách khỏi nội dung yêu cầu khi nhập gộp. Validator PDF duyệt toàn bộ đồ thị dictionary/array và giải tham chiếu gián tiếp bằng stack, dùng tập object đã thăm để chống vòng lặp và tránh giới hạn đệ quy. Kiểm tra bao gồm AcroForm/Fields, XFA, Outlines và chuỗi action; không giải mã stream để tìm từ khóa.
 
 Provider Gemini là opt-in qua `GEMINI_ENABLED` (mặc định false). Hai nhánh gọi provider giới hạn đầu ra 128/384 token, câu hỏi đã redaction tối đa 600 ký tự, tổng nguồn tối đa 4.000 ký tự; SDK đặt `retry=None`, timeout 5 giây. Không gọi provider cho fallback chuẩn. Đây là giới hạn mỗi lần gọi, chưa phải hạn mức token mỗi ngày.

@@ -32,6 +32,8 @@ Mục LEAVE.REQUEST — trang PDF 3.
 
 Quy trình minh họa để HR xem xét: nhân viên gửi đề nghị trên ứng dụng, nêu ngày/buổi và loại nghỉ; quản lý trực tiếp xem xét và phản hồi; hệ thống lưu trạng thái và lịch sử xử lý.
 
+Làm việc từ xa (Remote / WFH) được đăng ký theo buổi hoặc cả ngày và do quản lý trực tiếp duyệt, không cần HR duyệt. Đơn Remote được duyệt hưởng 100% lương theo thời lượng đăng ký, miễn quét QR kiosk và không trừ quỹ phép năm.
+
 AI chỉ hỗ trợ điền bản nháp. Người lao động kiểm tra và tự gửi đề nghị; AI không phê duyệt, không gửi thay và không bảo đảm đề nghị được chấp thuận.
 
 Các mốc báo trước, chứng từ, người thay thế và luồng xử lý ngoại lệ phải được công ty xác nhận trước khi áp dụng. Không coi các gợi ý trong PDF này là điều kiện pháp lý.

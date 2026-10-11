@@ -124,7 +124,7 @@ try {
     await evaluate('document.querySelector("button[type=submit]").click()');
     await until('location.pathname === "/dashboard"', 'authenticated dashboard');
     await send('Page.navigate', { url: origin + '/leaves' });
-    await until('Array.from(document.querySelectorAll("button")).some(e=>e.textContent.includes("Tạo đơn xin nghỉ phép"))', 'leave page');
+    await until('Array.from(document.querySelectorAll("button")).some(e=>e.textContent.includes("Tạo đơn xin nghỉ / Remote"))', 'leave page');
   };
   await send('Page.enable');
   await send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false });
@@ -132,7 +132,7 @@ try {
   await until(`!!document.querySelector('button') && document.body.innerText.includes('Tổng tiêu chuẩn phép năm')`, 'balance rendered');
   for (let i = 0; i < 2; i++) {
     phase = `submit-${i}`;
-    await click('Tạo đơn xin nghỉ phép');
+    await click('Tạo đơn xin nghỉ / Remote');
     await until('!!document.querySelector("#reason") && !!document.querySelector("#leave_date")', 'leave form');
     await pointerClick('.ant-modal .ant-select');
     await until(`Array.from(document.querySelectorAll('.ant-select-item-option')).some(e=>e.getClientRects().length && e.textContent.includes('Nghỉ phép năm'))`, 'annual leave option');

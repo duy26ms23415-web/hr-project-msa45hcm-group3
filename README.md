@@ -1,5 +1,7 @@
 # HR Management with AI Project
 
+Đơn làm việc từ xa (`REMOTE`/WFH) dùng cùng API `/api/v1/leaves` và quản lý trực tiếp duyệt qua `/review`; đơn được duyệt ghi công `REMOTE`, hưởng lương theo thời lượng đăng ký và không trừ phép năm. Chỉ `ANNUAL` kiểm tra/trừ quỹ phép năm. AI nhận dạng yêu cầu Remote để điền loại đơn, vẫn yêu cầu người dùng kiểm tra và tự gửi; hỏi đáp quy định Remote chỉ dùng tài liệu đã công bố đủ quyền.
+
 Khi nháp đang hỏi lý do, câu trả lời chỉ điền lý do và giữ nguyên ngày, buổi, lượt công và giờ đã chọn. Với câu nhập gộp, phần sau “lý do/vì” không dùng để suy ra các trường khác. Upload PDF từ chối XFA và action bị cấm trong form, bookmark hoặc cấu trúc lồng nhau; bookmark nội bộ an toàn vẫn được chấp nhận.
 
 Gemini mặc định tắt (`GEMINI_ENABLED=false`), kể cả khi đã cấu hình API key. Fallback, tra cứu tài liệu và báo cáo hoạt động không cần Gemini. Khi chủ động bật, classifier gửi tối đa 600 ký tự đã che dữ liệu cá nhân, nguồn policy tối đa 4.000 ký tự; đầu ra giới hạn 128 token cho phân loại, 256 token cho filter báo cáo hoặc 384 token cho trích nguồn. Không tự retry; lỗi provider dùng fallback hoặc mẫu lỗi hiện hữu.
