@@ -152,8 +152,8 @@ class AttendanceService:
     async def recalculate_day(db: AsyncSession, employee_id: int, work_date: date):
         """Aggregate all valid scan/fix events for the employee on work_date"""
         # Fetch all events on this date (converted to local date UTC+7)
-        day_start_utc = datetime.combine(work_date, time(0, 0)) - timedelta(hours=7)
-        day_end_utc = datetime.combine(work_date, time(23, 59, 59)) - timedelta(hours=7)
+        day_start_utc = datetime.combine(work_date, time(0, 0), tzinfo=timezone.utc) - timedelta(hours=7)
+        day_end_utc = datetime.combine(work_date, time(23, 59, 59), tzinfo=timezone.utc) - timedelta(hours=7)
 
         stmt = select(AttendanceEvent).where(
             and_(

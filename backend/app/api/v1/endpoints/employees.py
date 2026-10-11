@@ -1,8 +1,8 @@
 from datetime import date
 from typing import List, Optional
 # pyrefly: ignore [missing-import]
-from fastapi import APIRouter, Depends, HTTPException, status, Query
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Response
+from sqlalchemy import select, delete
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,9 +12,10 @@ from app.api.deps import require_roles
 from app.models.auth import UserAccount, Role, UserRoleAssignment
 from app.core.security import get_password_hash
 from app.models.organization import Employee, Department, Position
-from app.schemas.organization import EmployeeCreate, EmployeeUpdate, EmployeeResponse
+from app.schemas.organization import EmployeeCreate, EmployeeUpdate, EmployeeResponse, EmployeePasswordReset
 
 router = APIRouter()
+DEMO_EMAILS = {"admin@hrgroup3.com", "manager@hrgroup3.com", "employee@hrgroup3.com"}
 
 
 @router.get("", response_model=List[EmployeeResponse])
@@ -24,11 +25,17 @@ async def list_employees(
     db: AsyncSession = Depends(get_db),
     current_user: UserAccount = Depends(require_roles(["HR", "ADMIN", "MANAGER"]))
 ):
-    """List employees with optional department and status filtering"""
+    """List employees within the current user's scope, with optional filters."""
     stmt = select(Employee).options(
         selectinload(Employee.department),
-        selectinload(Employee.position)
+        selectinload(Employee.position),
+        selectinload(Employee.user_account)
     )
+    user_roles = {assignment.role.role_code for assignment in current_user.role_assignments}
+    if not user_roles.intersection({"ADMIN", "HR"}):
+        if current_user.employee_id is None:
+            return []
+        stmt = stmt.where(Employee.manager_employee_id == current_user.employee_id)
     if department_id:
         stmt = stmt.where(Employee.department_id == department_id)
     if status_filter:
@@ -125,7 +132,8 @@ async def create_employee(
     # Reload with relationships
     stmt_load = select(Employee).where(Employee.employee_id == emp.employee_id).options(
         selectinload(Employee.department),
-        selectinload(Employee.position)
+        selectinload(Employee.position),
+        selectinload(Employee.user_account)
     )
     loaded_emp = (await db.execute(stmt_load)).scalar_one()
     return loaded_emp
@@ -140,7 +148,8 @@ async def get_employee(
     """Get single employee profile by ID"""
     stmt = select(Employee).where(Employee.employee_id == employee_id).options(
         selectinload(Employee.department),
-        selectinload(Employee.position)
+        selectinload(Employee.position),
+        selectinload(Employee.user_account)
     )
     emp = (await db.execute(stmt)).scalar_one_or_none()
     if not emp:
@@ -148,6 +157,13 @@ async def get_employee(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Không tìm thấy nhân viên"
         )
+    user_roles = {assignment.role.role_code for assignment in current_user.role_assignments}
+    if not user_roles.intersection({"ADMIN", "HR"}):
+        if current_user.employee_id is None or (
+            emp.employee_id != current_user.employee_id
+            and emp.manager_employee_id != current_user.employee_id
+        ):
+            raise HTTPException(status_code=404, detail="Không tìm thấy nhân viên")
     return emp
 
 
@@ -167,7 +183,45 @@ async def update_employee(
             detail="Không tìm thấy nhân viên"
         )
 
-    update_data = emp_update.model_dump(exclude_unset=True)
+    update_data = emp_update.model_dump(exclude_unset=True, exclude={"new_password"})
+    account = (await db.execute(
+        select(UserAccount).where(UserAccount.employee_id == employee_id)
+    )).scalar_one_or_none()
+    user_roles = {assignment.role.role_code for assignment in current_user.role_assignments}
+    if emp_update.new_password is not None and "ADMIN" not in user_roles:
+        raise HTTPException(status_code=403, detail="Chỉ ADMIN được đặt lại mật khẩu")
+    is_demo = emp.email.lower() in DEMO_EMAILS or (account and account.login_email.lower() in DEMO_EMAILS)
+    if is_demo and (
+        emp_update.new_password is not None
+        or ("email" in update_data and str(update_data["email"]) != emp.email)
+        or ("employment_status" in update_data and update_data["employment_status"] != emp.employment_status)
+    ):
+        raise HTTPException(status_code=400, detail="Không được đổi email, mật khẩu hoặc trạng thái của tài khoản demo")
+    employee_role = None
+    if emp_update.new_password is not None and not account:
+        login_email = str(update_data.get("email", emp.email))
+        existing_login = (await db.execute(
+            select(UserAccount).where(UserAccount.login_email == login_email)
+        )).scalar_one_or_none()
+        if existing_login:
+            raise HTTPException(status_code=409, detail="Email đăng nhập đã tồn tại")
+        employee_role = (await db.execute(
+            select(Role).where(Role.role_code == "EMPLOYEE")
+        )).scalar_one_or_none()
+        if not employee_role:
+            raise HTTPException(status_code=400, detail="Chưa có quyền EMPLOYEE. Vui lòng khởi tạo dữ liệu mẫu.")
+    if "email" in update_data:
+        email = str(update_data["email"])
+        if not is_demo and email.lower() in DEMO_EMAILS:
+            raise HTTPException(status_code=400, detail="Email này dành cho tài khoản demo")
+        duplicate_employee = (await db.execute(
+            select(Employee).where(Employee.email == email, Employee.employee_id != employee_id)
+        )).scalar_one_or_none()
+        duplicate_account = (await db.execute(
+            select(UserAccount).where(UserAccount.login_email == email, UserAccount.employee_id != employee_id)
+        )).scalar_one_or_none()
+        if duplicate_employee or duplicate_account:
+            raise HTTPException(status_code=409, detail="Email đã tồn tại trong hệ thống")
 
     # Validate foreign keys if updated
     if "department_id" in update_data and update_data["department_id"] is not None:
@@ -205,15 +259,46 @@ async def update_employee(
                 detail="Người quản lý không tồn tại"
             )
 
-    for field, value in update_data.items():
-        setattr(emp, field, value)
+    if "employment_status" in update_data:
+        if update_data["employment_status"] == "ACTIVE":
+            update_data["termination_date"] = None
+        elif not update_data.get("termination_date") and not emp.termination_date:
+            update_data["termination_date"] = date.today()
 
-    await db.commit()
+    # Update profile and login account in the same transaction.
+    try:
+        for field, value in update_data.items():
+            setattr(emp, field, value)
+        if account:
+            if "email" in update_data:
+                account.login_email = str(update_data["email"])
+            if "employment_status" in update_data:
+                account.is_active = update_data["employment_status"] == "ACTIVE"
+            if emp_update.new_password is not None:
+                account.password_hash = get_password_hash(emp_update.new_password)
+        elif emp_update.new_password is not None:
+            account = UserAccount(
+                employee_id=emp.employee_id,
+                login_email=str(emp.email),
+                password_hash=get_password_hash(emp_update.new_password),
+                is_active=emp.employment_status == "ACTIVE",
+            )
+            db.add(account)
+            await db.flush()
+            db.add(UserRoleAssignment(
+                user_account_id=account.user_account_id,
+                role_id=employee_role.role_id,
+            ))
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail="Email đã tồn tại trong hệ thống")
 
     # Reload with relationships
     stmt_load = select(Employee).where(Employee.employee_id == employee_id).options(
         selectinload(Employee.department),
-        selectinload(Employee.position)
+        selectinload(Employee.position),
+        selectinload(Employee.user_account)
     )
     loaded_emp = (await db.execute(stmt_load)).scalar_one()
     return loaded_emp
@@ -225,23 +310,63 @@ async def deactivate_employee(
     db: AsyncSession = Depends(get_db),
     current_user: UserAccount = Depends(require_roles(["HR", "ADMIN"]))
 ):
-    """Deactivate employee and terminate employment"""
-    stmt = select(Employee).where(Employee.employee_id == employee_id)
-    emp = (await db.execute(stmt)).scalar_one_or_none()
-    if not emp:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Không tìm thấy nhân viên"
-        )
-
-    emp.employment_status = "INACTIVE"
-    emp.termination_date = date.today()
-    await db.commit()
-
-    # Reload with relationships
-    stmt_load = select(Employee).where(Employee.employee_id == employee_id).options(
-        selectinload(Employee.department),
-        selectinload(Employee.position)
+    """Deactivate both the employee profile and login account."""
+    return await update_employee(
+        employee_id,
+        EmployeeUpdate(employment_status="INACTIVE", termination_date=date.today()),
+        db,
+        current_user,
     )
-    loaded_emp = (await db.execute(stmt_load)).scalar_one()
-    return loaded_emp
+
+
+@router.post("/{employee_id}/password", status_code=status.HTTP_204_NO_CONTENT)
+async def reset_employee_password(
+    employee_id: int,
+    password_in: EmployeePasswordReset,
+    db: AsyncSession = Depends(get_db),
+    current_user: UserAccount = Depends(require_roles(["ADMIN"]))
+):
+    """Allow an administrator to set a new password on an existing employee account."""
+    account = (await db.execute(
+        select(UserAccount).where(UserAccount.employee_id == employee_id)
+    )).scalar_one_or_none()
+    if not account:
+        raise HTTPException(status_code=404, detail="Nhân viên chưa có tài khoản đăng nhập")
+
+    if account.login_email.lower() in DEMO_EMAILS:
+        raise HTTPException(status_code=400, detail="Không được đổi mật khẩu của tài khoản demo")
+
+    account.password_hash = get_password_hash(password_in.new_password)
+    await db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.delete("/{employee_id}/account", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_employee_account(
+    employee_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: UserAccount = Depends(require_roles(["ADMIN"]))
+):
+    """Delete a login account and its role assignments, keeping the employee profile."""
+    account = (await db.execute(
+        select(UserAccount).where(UserAccount.employee_id == employee_id)
+    )).scalar_one_or_none()
+    if not account:
+        raise HTTPException(status_code=404, detail="Nhân viên chưa có tài khoản đăng nhập")
+    if account.login_email.lower() in DEMO_EMAILS:
+        raise HTTPException(status_code=400, detail="Không được xóa tài khoản demo")
+    if account.user_account_id == current_user.user_account_id:
+        raise HTTPException(status_code=400, detail="Không thể xóa tài khoản đang đăng nhập")
+    try:
+        await db.execute(delete(UserRoleAssignment).where(
+            UserRoleAssignment.user_account_id == account.user_account_id
+        ))
+        await db.delete(account)
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="Tài khoản đang được tham chiếu trong dữ liệu lịch sử nên không thể xóa. Bạn có thể chuyển nhân viên sang Tạm ngưng để khóa đăng nhập.",
+        )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

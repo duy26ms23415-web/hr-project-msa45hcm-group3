@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Card,
   Table,
@@ -16,6 +16,8 @@ import {
 } from 'antd';
 import {
   UserAddOutlined,
+  EditOutlined,
+  DeleteOutlined,
   QrcodeOutlined,
   TeamOutlined,
   MailOutlined,
@@ -29,9 +31,11 @@ import api from '../api/client';
 import type { Employee, QRCard } from '../types';
 
 const { Title, Text } = Typography;
+const DEMO_EMAILS = new Set(['admin@hrgroup3.com', 'manager@hrgroup3.com', 'employee@hrgroup3.com']);
 
 export const EmployeesPage: React.FC = () => {
-  const { user, hasRole } = useAuth();
+  const { hasRole } = useAuth();
+  const isAdmin = hasRole(['ADMIN']);
   const isAdminOrHR = hasRole(['ADMIN', 'HR']);
 
   const [employees, setEmployees] = useState<Employee[]>([]);
@@ -44,19 +48,101 @@ export const EmployeesPage: React.FC = () => {
   const [form] = Form.useForm();
   const [submitting, setSubmitting] = useState(false);
 
+  const [editingEmployee, setEditingEmployee] = useState<Employee | null>(null);
+  const [editForm] = Form.useForm();
+  const [savingEmployee, setSavingEmployee] = useState(false);
+  const editingDemo = !!editingEmployee && DEMO_EMAILS.has(editingEmployee.email.toLowerCase());
+
+  const closeEditModal = () => {
+    if (savingEmployee) return;
+    setEditingEmployee(null);
+    editForm.resetFields();
+  };
+
+  const handleUpdateEmployee = async (values: any) => {
+    if (!isAdmin || !editingEmployee || savingEmployee) return;
+    setSavingEmployee(true);
+    try {
+      const payload = {
+        full_name: values.full_name,
+        phone_number: values.phone_number || null,
+        department_id: values.department_id,
+        position_id: values.position_id,
+        manager_employee_id: values.manager_employee_id ?? null,
+        hire_date: values.hire_date.format('YYYY-MM-DD'),
+        ...(editingDemo ? {} : {
+          email: values.email,
+          employment_status: values.employment_status,
+          ...(values.new_password ? { new_password: values.new_password } : {}),
+        }),
+      };
+      await api.patch(`/employees/${editingEmployee.employee_id}`, payload);
+      message.success(!editingEmployee.has_login_account && values.new_password ? 'Đã cập nhật hồ sơ và tạo tài khoản đăng nhập với quyền Nhân viên.' : 'Đã cập nhật thông tin nhân viên.');
+      setEditingEmployee(null);
+      editForm.resetFields();
+      fetchEmployees();
+    } catch (err: any) {
+      const detail = err.response?.data?.detail;
+      message.error(typeof detail === 'string' ? detail : 'Không cập nhật được nhân viên. Vui lòng kiểm tra thông tin.');
+    } finally {
+      setSavingEmployee(false);
+    }
+  };
+
+  const confirmDeleteAccount = (employee: Employee) => {
+    if (!isAdmin || !employee.has_login_account || DEMO_EMAILS.has(employee.email.toLowerCase())) return;
+    Modal.confirm({
+      title: 'Xóa tài khoản đăng nhập?',
+      content: `Nhân viên: ${employee.full_name} (${employee.email}). Tài khoản sẽ bị xóa và không thể đăng nhập. Nhân viên sẽ không còn hiển thị trong danh sách. Hồ sơ và lịch sử chấm công được giữ lại.`,
+      okText: 'Xóa tài khoản',
+      okButtonProps: { danger: true },
+      cancelText: 'Hủy',
+      onOk: async () => {
+        try {
+          await api.delete(`/employees/${employee.employee_id}/account`);
+          setEmployees((current) => current.filter((item) => item.employee_id !== employee.employee_id));
+          message.success('Đã xóa tài khoản và ẩn nhân viên khỏi danh sách.');
+          await fetchEmployees();
+        } catch (err: any) {
+          if (err.response?.status === 404) {
+            setEmployees((current) => current.filter((item) => item.employee_id !== employee.employee_id));
+            message.info('Tài khoản đã được xóa. Nhân viên không còn hiển thị trong danh sách.');
+            await fetchEmployees();
+            return;
+          }
+          const detail = err.response?.data?.detail;
+          message.error(typeof detail === 'string' ? detail : 'Không xóa được tài khoản. Vui lòng thử lại.');
+          throw err;
+        }
+      },
+    });
+  };
+
   // QR Modal
   const [qrModalOpen, setQrModalOpen] = useState(false);
   const [selectedEmployee, setSelectedEmployee] = useState<Employee | null>(null);
   const [qrCard, setQrCard] = useState<any | null>(null);
   const [loadingQr, setLoadingQr] = useState(false);
+  const [qrError, setQrError] = useState<string | null>(null);
+  const qrRequestRef = useRef(0);
+
+  const closeQrModal = () => {
+    qrRequestRef.current += 1;
+    setQrModalOpen(false);
+    setQrCard(null);
+    setLoadingQr(false);
+  };
 
   const fetchEmployees = async () => {
     try {
       setLoading(true);
-      const res = await api.get('/employees');
-      setEmployees(res.data);
+      const res = await api.get<Employee[]>('/employees');
+      // Keep profile data in the API for attendance history; show login accounts here.
+      setEmployees(res.data.filter((employee) => employee.has_login_account));
     } catch (e) {
       console.error(e);
+      setEmployees([]);
+      message.error('Không tải được danh sách nhân viên. Vui lòng thử lại.');
     } finally {
       setLoading(false);
     }
@@ -78,8 +164,8 @@ export const EmployeesPage: React.FC = () => {
 
   useEffect(() => {
     fetchEmployees();
-    fetchMetadata();
-  }, []);
+    if (isAdminOrHR) fetchMetadata();
+  }, [isAdminOrHR]);
 
   const handleCreateEmployee = async (values: any) => {
     setSubmitting(true);
@@ -117,24 +203,30 @@ export const EmployeesPage: React.FC = () => {
   };
 
   const handleViewQR = async (emp: Employee) => {
+    const requestId = ++qrRequestRef.current;
     setSelectedEmployee(emp);
+    setQrCard(null);
+    setQrError(null);
     setQrModalOpen(true);
     setLoadingQr(true);
     try {
-      const res = await api.get(`/attendance/employees/${emp.employee_id}/qr-cards`);
-      if (res.data && res.data.length > 0) {
-        setQrCard(res.data[0]);
-      } else {
-        // Generate on demand if none exists
-        const createRes = await api.post(`/attendance/employees/${emp.employee_id}/qr-cards`, {
-          qr_code_value: `${emp.employee_code}_QR_STATIC`,
-        });
-        setQrCard(createRes.data);
+      const res = await api.get<QRCard[]>(`/attendance/employees/${emp.employee_id}/qr-cards`);
+      if (requestId !== qrRequestRef.current) return;
+      const card = res.data.find((item) =>
+        item.employee_id === emp.employee_id && !item.revoked_at &&
+        (!item.expires_at || dayjs(item.expires_at).isAfter(dayjs()))
+      );
+      if (!card?.card_code) {
+        setQrError('Chưa có mã QR hợp lệ để hiển thị. Vui lòng kiểm tra thẻ đã cấp.');
+        return;
       }
-    } catch (err) {
-      console.error(err);
+      setQrCard(card);
+    } catch (err: any) {
+      if (requestId !== qrRequestRef.current) return;
+      const detail = err.response?.data?.detail;
+      setQrError(typeof detail === 'string' ? detail : 'Không tải được thẻ QR. Vui lòng thử lại.');
     } finally {
-      setLoadingQr(false);
+      if (requestId === qrRequestRef.current) setLoadingQr(false);
     }
   };
 
@@ -143,9 +235,11 @@ export const EmployeesPage: React.FC = () => {
       {/* Header bar */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
         <div>
-          <Title level={4} style={{ margin: 0 }}>Quản lý Nhân sự & Thẻ QR</Title>
+          <Title level={4} style={{ margin: 0 }}>{isAdminOrHR ? 'Quản lý Nhân sự & Thẻ QR' : 'Nhân viên của tôi'}</Title>
           <Text type="secondary" style={{ fontSize: 13 }}>
-            Danh sách nhân sự • Thẻ QR vật lý tĩnh để quẹt tại máy Kiosk
+            {isAdminOrHR
+              ? 'Danh sách toàn bộ nhân viên • Thẻ QR vật lý tĩnh để quẹt tại máy Kiosk'
+              : 'Danh sách nhân viên do bạn quản lý trực tiếp'}
           </Text>
         </div>
 
@@ -175,7 +269,42 @@ export const EmployeesPage: React.FC = () => {
           dataSource={employees}
           rowKey="employee_id"
           loading={loading}
+          locale={{ emptyText: isAdminOrHR ? 'Chưa có nhân viên' : 'Chưa có nhân viên được phân công cho bạn' }}
           columns={[
+            ...(isAdmin ? [{
+              title: 'Tài khoản đăng nhập',
+              key: 'login_account_status',
+              render: (_: unknown, record: Employee) => (
+                <Tag color={record.has_login_account ? 'blue' : 'default'}>
+                  {record.has_login_account ? 'Có tài khoản' : 'Chưa có tài khoản'}
+                </Tag>
+              ),
+            }] : []),
+            ...(isAdmin ? [{
+              title: 'Thao tác',
+              key: 'edit_employee',
+              render: (_: unknown, record: Employee) => (
+                <Space wrap>
+                <Button size="small" icon={<EditOutlined />} onClick={() => {
+                  editForm.resetFields();
+                  editForm.setFieldsValue({
+                    ...record,
+                    hire_date: dayjs(record.hire_date),
+                    new_password: undefined,
+                    confirm_password: undefined,
+                  });
+                  setEditingEmployee(record);
+                }}>
+                  Cập nhật nhân viên
+                </Button>
+                {record.has_login_account && !DEMO_EMAILS.has(record.email.toLowerCase()) && (
+                  <Button size="small" danger icon={<DeleteOutlined />} onClick={() => confirmDeleteAccount(record)}>
+                    Xóa tài khoản
+                  </Button>
+                )}
+                </Space>
+              ),
+            }] : []),
             {
               title: 'Mã NV',
               dataIndex: 'employee_code',
@@ -217,7 +346,7 @@ export const EmployeesPage: React.FC = () => {
               key: 'employment_status',
               render: (s) => (
                 <Tag color={s === 'ACTIVE' ? 'success' : 'default'}>
-                  {s === 'ACTIVE' ? 'Đang làm việc' : s}
+                  {s === 'ACTIVE' ? 'Đang làm việc' : s === 'TERMINATED' ? 'Đã nghỉ việc' : s === 'INACTIVE' ? 'Tạm ngưng' : s}
                 </Tag>
               ),
             },
@@ -238,6 +367,72 @@ export const EmployeesPage: React.FC = () => {
           ]}
         />
       </Card>
+
+      {isAdmin && (
+        <Modal
+          open={editingEmployee !== null}
+          title="Cập nhật nhân viên"
+          onCancel={closeEditModal}
+          footer={null}
+          closable={!savingEmployee}
+          maskClosable={!savingEmployee}
+          keyboard={!savingEmployee}
+          width={600}
+        >
+          <p>Mã nhân viên: <b>{editingEmployee?.employee_code}</b></p>
+          {editingEmployee && !editingEmployee.has_login_account && <p>Nhân viên chưa có tài khoản đăng nhập. Nhập mật khẩu mới để tạo tài khoản với quyền Nhân viên, hoặc để trống để chỉ cập nhật hồ sơ.</p>}
+          {editingDemo && <p>Tài khoản demo: giữ nguyên email, mật khẩu và trạng thái đăng nhập.</p>}
+          <Form form={editForm} layout="vertical" onFinish={handleUpdateEmployee} disabled={savingEmployee}>
+            <Form.Item name="full_name" label="Họ và tên" rules={[{ required: true, whitespace: true, max: 200, message: 'Vui lòng nhập họ tên, tối đa 200 ký tự.' }]}>
+              <Input />
+            </Form.Item>
+            <Form.Item name="email" label="Email công ty / Email đăng nhập" extra="Cập nhật email này đồng thời cập nhật email đăng nhập của tài khoản hiện có." rules={[{ required: true, type: 'email', message: 'Vui lòng nhập email hợp lệ.' }]}>
+              <Input disabled={editingDemo || savingEmployee} />
+            </Form.Item>
+            <Form.Item name="phone_number" label="Số điện thoại" rules={[{ max: 20, message: 'Tối đa 20 ký tự.' }]}>
+              <Input />
+            </Form.Item>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+              <Form.Item name="department_id" label="Phòng ban" rules={[{ required: true, message: 'Chọn phòng ban.' }]}>
+                <Select options={departments.map(d => ({ value: d.department_id, label: d.department_name }))} />
+              </Form.Item>
+              <Form.Item name="position_id" label="Chức danh" rules={[{ required: true, message: 'Chọn chức danh.' }]}>
+                <Select options={positions.map(p => ({ value: p.position_id, label: p.position_name }))} />
+              </Form.Item>
+            </div>
+            <Form.Item name="manager_employee_id" label="Quản lý trực tiếp">
+              <Select allowClear options={employees.filter(e => e.employee_id !== editingEmployee?.employee_id).map(e => ({ value: e.employee_id, label: `${e.full_name} (${e.employee_code})` }))} />
+            </Form.Item>
+            <Form.Item name="hire_date" label="Ngày bắt đầu làm việc" rules={[{ required: true, message: 'Chọn ngày bắt đầu.' }]}>
+              <DatePicker style={{ width: '100%' }} format="YYYY-MM-DD" />
+            </Form.Item>
+            <Form.Item name="employment_status" label="Trạng thái làm việc" extra="Tạm ngưng hoặc đã nghỉ việc sẽ khóa đăng nhập; đang làm việc sẽ mở lại tài khoản hiện có." rules={[{ required: true }]}>
+              <Select disabled={editingDemo || savingEmployee} options={[
+                { value: 'ACTIVE', label: 'Đang làm việc' },
+                { value: 'INACTIVE', label: 'Tạm ngưng' },
+                { value: 'TERMINATED', label: 'Đã nghỉ việc' },
+              ]} />
+            </Form.Item>
+            {!editingDemo && <>
+              <Form.Item name="new_password" label="Mật khẩu mới (tùy chọn)" extra={editingEmployee?.has_login_account ? "Để trống để giữ nguyên mật khẩu hiện tại." : "Nhập mật khẩu để tạo tài khoản đăng nhập bằng email ở trên."} rules={[
+                { min: 8, message: 'Mật khẩu cần ít nhất 8 ký tự.' },
+                { validator: (_, value) => !value || new TextEncoder().encode(value).length <= 72 ? Promise.resolve() : Promise.reject(new Error('Mật khẩu không được vượt quá 72 byte UTF-8.')) },
+              ]}>
+                <Input.Password autoComplete="new-password" />
+              </Form.Item>
+              <Form.Item name="confirm_password" label="Nhập lại mật khẩu mới" dependencies={['new_password']} rules={[
+                ({ getFieldValue }) => ({ validator: (_, value) => value === getFieldValue('new_password') || (!value && !getFieldValue('new_password')) ? Promise.resolve() : Promise.reject(new Error('Mật khẩu nhập lại không khớp.')) }),
+              ]}>
+                <Input.Password autoComplete="new-password" />
+              </Form.Item>
+            </>}
+            <Space>
+              <Button onClick={closeEditModal} disabled={savingEmployee}>Hủy</Button>
+              <Button type="primary" htmlType="submit" loading={savingEmployee}>Lưu thay đổi</Button>
+            </Space>
+          </Form>
+        </Modal>
+      )}
 
       {/* Modal Add Employee */}
       <Modal
@@ -354,7 +549,7 @@ export const EmployeesPage: React.FC = () => {
       {/* Modal View QR Card */}
       <Modal
         open={qrModalOpen}
-        onCancel={() => setQrModalOpen(false)}
+        onCancel={closeQrModal}
         footer={null}
         width={380}
         styles={{ body: { textAlign: 'center', padding: '28px 24px' } }}
@@ -366,11 +561,9 @@ export const EmployeesPage: React.FC = () => {
         </div>
 
         {(() => {
-          const qrCodeValue =
-            qrCard?.card_code ||
-            qrCard?.qr_code_value ||
-            qrCard?.raw_token ||
-            (selectedEmployee ? `${selectedEmployee.employee_code}_QR_STATIC` : '');
+          const qrCodeValue = !loadingQr && qrCard?.employee_id === selectedEmployee?.employee_id
+            ? qrCard?.card_code || ''
+            : '';
 
           return (
             <>
@@ -388,7 +581,7 @@ export const EmployeesPage: React.FC = () => {
                   <QRCodeSVG value={qrCodeValue} size={180} />
                 ) : (
                   <div style={{ width: 180, height: 180, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    Đang tải mã QR...
+                    {loadingQr ? 'Đang tải mã QR...' : qrError || 'Chưa có mã QR hợp lệ.'}
                   </div>
                 )}
               </div>
@@ -397,14 +590,14 @@ export const EmployeesPage: React.FC = () => {
                 <div>Họ tên: <b>{selectedEmployee?.full_name}</b></div>
                 <div>Mã nhân viên: <b>{selectedEmployee?.employee_code}</b></div>
                 <div>Mã thẻ QR: <code style={{ color: '#1677ff', fontWeight: 600 }}>{qrCodeValue}</code></div>
-                <div style={{ marginTop: 4 }}>Trạng thái: <Tag color="success">HOẠT ĐỘNG</Tag></div>
+                <div style={{ marginTop: 4 }}>Trạng thái: <Tag color={qrCodeValue ? 'success' : 'default'}>{qrCodeValue ? 'HOẠT ĐỘNG' : 'CHƯA SẴN SÀNG'}</Tag></div>
               </div>
             </>
           );
         })()}
 
         <div style={{ marginTop: 20 }}>
-          <Button type="primary" block onClick={() => setQrModalOpen(false)}>
+          <Button type="primary" block onClick={closeQrModal}>
             Đóng
           </Button>
         </div>
