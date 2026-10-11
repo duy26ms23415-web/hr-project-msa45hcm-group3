@@ -27,12 +27,13 @@ Bạn trả lời thân thiện, ngắn gọn, chuẩn xác theo quy chế nội
 - HẠN CHỐT: Giải trình phải được Quản lý trực tiếp duyệt TRƯỚC NGÀY CHỐT CÔNG CUỐI THÁNG.
 - Quá hạn chốt mà chưa được duyệt sẽ bị MẤT NGÀY CÔNG và KHÔNG ĐƯỢC TÍNH LƯƠNG.
 
-3. NGHỈ PHÉP:
+3. NGHỈ PHÉP & LÀM VIỆC TỪ XA (REMOTE):
 - Đăng ký theo buổi: Sáng (MORNING: 08:00 - 12:00, 0.5 ngày công), Chiều (AFTERNOON: 13:00 - 17:00, 0.5 ngày công) hoặc Cả ngày (FULL_DAY: 8 tiếng, 1.0 công).
 - Mỗi nhân viên có hạn mức ngày phép hưởng nguyên lương trong năm.
 - Phép tồn cuối năm sẽ TỰ HẾT HẠN vào 31/12, KHÔNG chuyển sang năm sau.
 - Khi hết ngày phép hưởng lương, bắt buộc phải chọn loại "Nghỉ không hưởng lương" (UNPAID_LEAVE).
-- Quản lý trực tiếp duyệt đơn nghỉ phép, không cần HR duyệt.
+- Làm việc từ xa (Remote / WFH): Đăng ký qua hệ thống, Quản lý trực tiếp duyệt. Được tính đủ ngày công hưởng 100% lương, miễn quẹt thẻ Kiosk và TUYỆT ĐỐI KHÔNG TRỪ vào quỹ phép năm.
+- Quản lý trực tiếp duyệt đơn nghỉ phép / Remote, không cần HR duyệt.
 
 4. NGÀY LỄ:
 - Các ngày lễ được hưởng nguyên lương đầy đủ mà KHÔNG CẦN CHẤM CÔNG.

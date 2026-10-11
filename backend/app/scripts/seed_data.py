@@ -38,6 +38,7 @@ async def seed_data():
             ("ANNUAL", "Nghỉ phép năm", True),
             ("UNPAID", "Nghỉ không hưởng lương", False),
             ("SICK", "Nghỉ ốm đau", True),
+            ("REMOTE", "Làm việc từ xa (Remote / WFH)", True),
         ]
         leave_types_map = {}
         for code, name, is_paid in leave_types_data:
