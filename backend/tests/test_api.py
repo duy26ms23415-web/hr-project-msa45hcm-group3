@@ -75,7 +75,7 @@ async def test_leave_request_and_manager_approval():
         # Use unique future date
         future_date = (date.today() + timedelta(days=secrets.randbelow(500) + 50)).isoformat()
 
-        leave_resp = await ac.post("/api/v1/leave/requests", json={
+        leave_resp = await ac.post("/api/v1/leaves/requests", json={
             "leave_type_id": 1,
             "leave_date": future_date,
             "session": "MORNING",
@@ -93,7 +93,7 @@ async def test_leave_request_and_manager_approval():
         mgr_token = mgr_auth.json()["access_token"]
 
         approve_resp = await ac.post(
-            f"/api/v1/leave/requests/{req_id}/approve",
+            f"/api/v1/leaves/requests/{req_id}/review",
             json={"status": "APPROVED", "review_note": "Đồng ý cho nghỉ"},
             headers={"Authorization": f"Bearer {mgr_token}"}
         )
@@ -179,10 +179,10 @@ async def test_google_login_unverified_email(mock_verify):
     """Verify Google login blocks unverified Google email"""
     settings.GOOGLE_CLIENT_ID = "mock_client_id"
     mock_verify.return_value = {"email": "admin@hrgroup3.com", "email_verified": False}
-    
+
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         response = await ac.post("/api/v1/auth/login/google", json={"id_token": "valid_token_but_unverified_email"})
-    
+
     assert response.status_code == 400
     assert "Email Google chưa được xác thực" in response.json()["detail"]
 
@@ -193,10 +193,10 @@ async def test_google_login_success(mock_verify):
     """Verify Google login succeeds for valid verified employee"""
     mock_verify.return_value = {"email": "admin@hrgroup3.com", "email_verified": True}
     settings.GOOGLE_CLIENT_ID = "mock_client_id"
-    
+
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         response = await ac.post("/api/v1/auth/login/google", json={"id_token": "valid_token_all_good"})
-    
+
     assert response.status_code == 200
     data = response.json()
     assert "access_token" in data

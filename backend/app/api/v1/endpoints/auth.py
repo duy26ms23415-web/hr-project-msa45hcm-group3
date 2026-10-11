@@ -60,7 +60,7 @@ async def login_with_google(login_data: GoogleLoginRequest, db: AsyncSession = D
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Server chưa được cấu hình GOOGLE_CLIENT_ID"
         )
-        
+
     try:
         idinfo = id_token.verify_oauth2_token(
             login_data.id_token, requests.Request(), settings.GOOGLE_CLIENT_ID, clock_skew_in_seconds=10
@@ -94,7 +94,7 @@ async def login_with_google(login_data: GoogleLoginRequest, db: AsyncSession = D
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Tài khoản email này chưa được cấp quyền truy cập hệ thống."
         )
-        
+
     if not user.is_active:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

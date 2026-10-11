@@ -1,5 +1,5 @@
 from datetime import date, datetime, timedelta, timezone, time
-from typing import List, Optional
+from typing import List, Optional, Literal
 from pydantic import BaseModel
 # pyrefly: ignore [missing-import]
 from fastapi import APIRouter, Depends, HTTPException, status, Query
@@ -19,6 +19,7 @@ from app.schemas.attendance import (
     AttendanceFixCreate, AttendanceFixReview, AttendanceFixResponse
 )
 from app.services.attendance_service import AttendanceService, hash_token
+from app.services.ai_access import require_known_role, require_reviewer_role
 
 router = APIRouter()
 
@@ -245,23 +246,33 @@ async def create_attendance_fix(
 @router.get("/fixes", response_model=List[AttendanceFixResponse])
 async def list_attendance_fixes(
     status_filter: Optional[str] = Query(None, alias="status"),
+    view: Literal["mine", "approvals", "visible"] = "mine",
     db: AsyncSession = Depends(get_db),
     current_user: UserAccount = Depends(get_current_user)
 ):
     """List attendance fixes (Employee sees own, Manager sees subordinate's)"""
     user_roles = [ra.role.role_code for ra in current_user.role_assignments]
+    role_set = set(user_roles)
+    require_known_role(role_set)
     stmt = select(AttendanceFix).order_by(AttendanceFix.created_at.desc())
 
-    if "ADMIN" in user_roles or "HR" in user_roles:
-        pass  # sees all
-    elif "MANAGER" in user_roles:
-        # Sees own or direct subordinates
-        stmt = stmt.where(
-            (AttendanceFix.employee_id == current_user.employee_id) |
-            (AttendanceFix.reviewer_employee_id == current_user.employee_id)
+    if view == "mine":
+        stmt = stmt.where(AttendanceFix.employee_id == current_user.employee_id)
+    elif view == "approvals":
+        require_reviewer_role(role_set)
+        if status_filter not in (None, "PENDING"):
+            raise HTTPException(status_code=422, detail="Approvals view only lists pending requests")
+        stmt = stmt.join(Employee, Employee.employee_id == AttendanceFix.employee_id).where(
+            Employee.manager_employee_id == current_user.employee_id,
+            AttendanceFix.status == "PENDING",
         )
     else:
-        stmt = stmt.where(AttendanceFix.employee_id == current_user.employee_id)
+        if not role_set & {"ADMIN", "HR", "MANAGER"}:
+            raise HTTPException(status_code=403, detail="AI_ACCESS_DENIED")
+        if not role_set & {"ADMIN", "HR"}:
+            stmt = stmt.join(Employee, Employee.employee_id == AttendanceFix.employee_id).where(
+                Employee.manager_employee_id == current_user.employee_id
+            )
 
     if status_filter:
         stmt = stmt.where(AttendanceFix.status == status_filter)
@@ -278,12 +289,11 @@ async def approve_attendance_fix(
     current_user: UserAccount = Depends(get_current_user)
 ):
     """Direct Manager approves attendance fix and recalculates day"""
-    user_roles = [ra.role.role_code for ra in current_user.role_assignments]
-    is_admin = "ADMIN" in user_roles
+    require_reviewer_role({ra.role.role_code for ra in current_user.role_assignments})
 
     review_in.status = "APPROVED"
     fix = await AttendanceService.review_fix_request(
-        db, fix_id, current_user.employee_id, review_in, is_admin=is_admin
+        db, fix_id, current_user.employee_id, review_in
     )
     await db.commit()
     await db.refresh(fix)
@@ -298,12 +308,11 @@ async def reject_attendance_fix(
     current_user: UserAccount = Depends(get_current_user)
 ):
     """Direct Manager rejects attendance fix"""
-    user_roles = [ra.role.role_code for ra in current_user.role_assignments]
-    is_admin = "ADMIN" in user_roles
+    require_reviewer_role({ra.role.role_code for ra in current_user.role_assignments})
 
     review_in.status = "REJECTED"
     fix = await AttendanceService.review_fix_request(
-        db, fix_id, current_user.employee_id, review_in, is_admin=is_admin
+        db, fix_id, current_user.employee_id, review_in
     )
     await db.commit()
     await db.refresh(fix)

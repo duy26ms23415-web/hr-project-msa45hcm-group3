@@ -31,6 +31,7 @@ import dayjs from 'dayjs';
 import { useAuth } from '../context/AuthContext';
 import api from '../api/client';
 import type { LeaveBalance, LeaveRequest } from '../types';
+import { useLocation, useNavigate } from 'react-router-dom';
 
 const { Title, Text } = Typography;
 
@@ -47,6 +48,24 @@ export const LeavePage: React.FC = () => {
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [form] = Form.useForm();
   const [submitting, setSubmitting] = useState(false);
+  const location = useLocation();
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    const draft = location.state?.aiDraft;
+    if (!draft) return;
+    form.resetFields();
+    form.setFieldsValue({ ...draft, leave_date: dayjs(draft.leave_date) });
+    setCreateModalOpen(true);
+    navigate(location.pathname, { replace: true, state: null });
+  }, [location.state, location.pathname, form, navigate]);
+
+  useEffect(() => {
+    if (location.state?.aiTab === 'approvals') {
+      setActiveTab('approvals');
+      navigate(location.pathname, { replace: true, state: null });
+    }
+  }, [location.state, location.pathname, navigate]);
 
   // Review modal
   const [reviewingReq, setReviewingReq] = useState<LeaveRequest | null>(null);
@@ -70,7 +89,7 @@ export const LeavePage: React.FC = () => {
   const fetchMyRequests = async () => {
     try {
       setLoading(true);
-      const res = await api.get('/leaves/requests');
+      const res = await api.get('/leaves/requests?view=mine');
       setMyRequests(res.data);
     } catch (e) {
       console.error(e);
@@ -80,10 +99,10 @@ export const LeavePage: React.FC = () => {
   };
 
   const fetchPendingRequests = async () => {
-    if (!hasRole(['MANAGER', 'ADMIN'])) return;
+    if (!hasRole(['MANAGER', 'HR', 'ADMIN'])) return;
     try {
       setLoading(true);
-      const res = await api.get('/leaves/requests?status=PENDING');
+      const res = await api.get('/leaves/requests?view=approvals');
       setPendingRequests(res.data);
     } catch (e) {
       console.error(e);
@@ -291,7 +310,7 @@ export const LeavePage: React.FC = () => {
                 />
               ),
             },
-            ...(hasRole(['MANAGER', 'ADMIN'])
+            ...(hasRole(['MANAGER', 'HR', 'ADMIN'])
               ? [
                   {
                     key: 'approvals',
@@ -399,6 +418,7 @@ export const LeavePage: React.FC = () => {
         open={createModalOpen}
         onCancel={() => setCreateModalOpen(false)}
         title="Lập đơn xin nghỉ phép / Làm việc từ xa (Remote)"
+        forceRender
         footer={null}
         width={540}
       >
