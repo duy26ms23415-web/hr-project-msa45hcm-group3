@@ -241,13 +241,23 @@ export const AttendancePage: React.FC = () => {
                       title: 'Giờ vào (Check-in)',
                       dataIndex: 'first_check_in_at',
                       key: 'first_check_in_at',
-                      render: (t) => (t ? dayjs(t).format('HH:mm:ss') : <span style={{ color: '#ef4444' }}>Chưa quẹt</span>),
+                      render: (t, record: AttendanceRecord) => {
+                        if (record.attendance_status === 'REMOTE') {
+                          return <span style={{ color: '#0284c7' }}>Làm việc từ xa</span>;
+                        }
+                        return t ? dayjs(t).format('HH:mm:ss') : <span style={{ color: '#ef4444' }}>Chưa quẹt</span>;
+                      },
                     },
                     {
                       title: 'Giờ ra (Check-out)',
                       dataIndex: 'last_check_out_at',
                       key: 'last_check_out_at',
-                      render: (t) => (t ? dayjs(t).format('HH:mm:ss') : <span style={{ color: '#ef4444' }}>Chưa quẹt</span>),
+                      render: (t, record: AttendanceRecord) => {
+                        if (record.attendance_status === 'REMOTE') {
+                          return <span style={{ color: '#0284c7' }}>Làm việc từ xa</span>;
+                        }
+                        return t ? dayjs(t).format('HH:mm:ss') : <span style={{ color: '#ef4444' }}>Chưa quẹt</span>;
+                      },
                     },
                     {
                       title: 'Tổng giờ làm',
@@ -262,6 +272,7 @@ export const AttendancePage: React.FC = () => {
                       render: (status) => {
                         let color = 'default';
                         if (status === 'PRESENT') color = 'success';
+                        else if (status === 'REMOTE') return <Tag color="cyan">Làm việc từ xa (REMOTE)</Tag>;
                         else if (status === 'INCOMPLETE') color = 'warning';
                         else if (status === 'ON_LEAVE') color = 'processing';
                         else if (status === 'HOLIDAY') color = 'purple';

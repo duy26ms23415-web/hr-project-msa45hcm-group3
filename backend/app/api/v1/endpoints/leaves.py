@@ -18,12 +18,23 @@ from app.services.leave_service import LeaveService
 router = APIRouter()
 
 
-# Leave Types
 @router.get("/types", response_model=List[LeaveTypeResponse])
 async def list_leave_types(db: AsyncSession = Depends(get_db)):
-    """List all active leave types"""
+    """List all active leave types (auto-ensures REMOTE type exists)"""
     result = await db.execute(select(LeaveType).where(LeaveType.is_active == True))
-    return result.scalars().all()
+    types = list(result.scalars().all())
+    if not any(t.leave_code == "REMOTE" for t in types):
+        remote_type = LeaveType(
+            leave_code="REMOTE",
+            leave_name="Làm việc từ xa (Remote / WFH)",
+            is_paid=True,
+            is_active=True
+        )
+        db.add(remote_type)
+        await db.commit()
+        await db.refresh(remote_type)
+        types.append(remote_type)
+    return types
 
 
 # Leave Balances
