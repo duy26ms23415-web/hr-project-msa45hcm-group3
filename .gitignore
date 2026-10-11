@@ -55,7 +55,7 @@ Thumbs.db
 
 # Database / Storage
 postgres_data/
-backend/storage/private/
+backend/storage/
 *.sqlite3
 *.db
 

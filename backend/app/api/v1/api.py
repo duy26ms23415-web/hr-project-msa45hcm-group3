@@ -19,7 +19,7 @@ api_router.include_router(employees.router, prefix="/employees", tags=["Employee
 api_router.include_router(departments.router, tags=["Organization"])
 api_router.include_router(holidays.router, prefix="/holidays", tags=["Holidays"])
 api_router.include_router(attendance.router, prefix="/attendance", tags=["Attendance & QR"])
-api_router.include_router(leaves.router, prefix="/leave", tags=["Leave Management"])
+api_router.include_router(leaves.router, prefix="/leaves", tags=["Leave Management"])
 api_router.include_router(payroll.router, prefix="/payroll", tags=["Payroll"])
 api_router.include_router(ai.router, prefix="/ai", tags=["AI Assistant"])
 api_router.include_router(knowledge.router, prefix="/ai/knowledge", tags=["AI Knowledge"])

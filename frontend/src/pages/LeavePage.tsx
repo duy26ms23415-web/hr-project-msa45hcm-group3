@@ -76,8 +76,8 @@ export const LeavePage: React.FC = () => {
   const fetchBalanceAndTypes = async () => {
     try {
       const [balRes, typesRes] = await Promise.all([
-        api.get('/leave/balances/me').catch(() => null),
-        api.get('/leave/types').catch(() => ({ data: [] })),
+        api.get('/leaves/balances/me').catch(() => null),
+        api.get('/leaves/types').catch(() => ({ data: [] })),
       ]);
       if (balRes) setBalance(balRes.data);
       setLeaveTypes(typesRes.data);
@@ -89,7 +89,7 @@ export const LeavePage: React.FC = () => {
   const fetchMyRequests = async () => {
     try {
       setLoading(true);
-      const res = await api.get('/leave/requests?view=mine');
+      const res = await api.get('/leaves/requests?view=mine');
       setMyRequests(res.data);
     } catch (e) {
       console.error(e);
@@ -102,7 +102,7 @@ export const LeavePage: React.FC = () => {
     if (!hasRole(['MANAGER', 'HR', 'ADMIN'])) return;
     try {
       setLoading(true);
-      const res = await api.get('/leave/requests?view=approvals');
+      const res = await api.get('/leaves/requests?view=approvals');
       setPendingRequests(res.data);
     } catch (e) {
       console.error(e);
@@ -125,7 +125,7 @@ export const LeavePage: React.FC = () => {
     try {
       const leaveDateStr = values.leave_date.format('YYYY-MM-DD');
 
-      await api.post('/leave/requests', {
+      await api.post('/leaves/requests', {
         leave_type_id: values.leave_type_id,
         leave_date: leaveDateStr,
         session: values.session,
@@ -147,7 +147,7 @@ export const LeavePage: React.FC = () => {
   const handleReviewSubmit = async () => {
     if (!reviewingReq) return;
     try {
-      await api.post(`/leave/requests/${reviewingReq.leave_request_id}/${reviewAction === 'APPROVED' ? 'approve' : 'reject'}`, {
+      await api.post(`/leaves/requests/${reviewingReq.leave_request_id}/review`, {
         status: reviewAction,
         review_note: reviewNote,
       });

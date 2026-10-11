@@ -74,7 +74,7 @@ async def test_leave_request_and_manager_approval():
         # Use unique future date
         future_date = (date.today() + timedelta(days=secrets.randbelow(500) + 50)).isoformat()
 
-        leave_resp = await ac.post("/api/v1/leave/requests", json={
+        leave_resp = await ac.post("/api/v1/leaves/requests", json={
             "leave_type_id": 1,
             "leave_date": future_date,
             "session": "MORNING",
@@ -92,7 +92,7 @@ async def test_leave_request_and_manager_approval():
         mgr_token = mgr_auth.json()["access_token"]
 
         approve_resp = await ac.post(
-            f"/api/v1/leave/requests/{req_id}/approve",
+            f"/api/v1/leaves/requests/{req_id}/review",
             json={"status": "APPROVED", "review_note": "Đồng ý cho nghỉ"},
             headers={"Authorization": f"Bearer {mgr_token}"}
         )

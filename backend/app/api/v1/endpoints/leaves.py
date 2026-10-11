@@ -120,35 +120,15 @@ async def list_leave_requests(
     return result.scalars().all()
 
 
-@router.post("/requests/{request_id}/approve", response_model=LeaveRequestResponse)
-async def approve_leave_request(
+@router.post("/requests/{request_id}/review", response_model=LeaveRequestResponse)
+async def review_leave_request(
     request_id: int,
     review_in: LeaveRequestReview,
     db: AsyncSession = Depends(get_db),
     current_user: UserAccount = Depends(get_current_user)
 ):
-    """Direct Manager approves leave request"""
+    """Direct Manager approves or rejects a leave request."""
     require_reviewer_role({ra.role.role_code for ra in current_user.role_assignments})
-    review_in.status = "APPROVED"
-    req = await LeaveService.review_leave_request(
-        db, request_id, current_user.employee_id, review_in
-    )
-    await db.commit()
-    
-    stmt = select(LeaveRequest).where(LeaveRequest.leave_request_id == req.leave_request_id).options(selectinload(LeaveRequest.leave_type))
-    return (await db.execute(stmt)).scalar_one()
-
-
-@router.post("/requests/{request_id}/reject", response_model=LeaveRequestResponse)
-async def reject_leave_request(
-    request_id: int,
-    review_in: LeaveRequestReview,
-    db: AsyncSession = Depends(get_db),
-    current_user: UserAccount = Depends(get_current_user)
-):
-    """Direct Manager rejects leave request"""
-    require_reviewer_role({ra.role.role_code for ra in current_user.role_assignments})
-    review_in.status = "REJECTED"
     req = await LeaveService.review_leave_request(
         db, request_id, current_user.employee_id, review_in
     )

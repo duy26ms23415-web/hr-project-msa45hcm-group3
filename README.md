@@ -11,7 +11,7 @@ Theo dõi phạm vi và bằng chứng còn thiếu tại [AI acceptance](docs/A
 
 Contracts frontend dùng chung tại `frontend/src/types/ai.ts` và `reports.ts`; action có union theo action_type. Suggestion trả default_inputs từ cùng resolver dùng khi thực thi; input khởi tạo nháp/report được kiểm theo allowlist và quyền. Fallback gợi ý lọc theo actor đã đăng nhập, không giả định mọi tài khoản có employee. Lỗi tải blob PDF/XLSX đọc envelope JSON; hết phiên chuyển login kèm thông báo cố định, giữ ngoại lệ kiosk.
 
-Migration `d9e0f1a2b3c4` thêm currency_code vào PayrollLine snapshot. Tính lương mới chép mã từ hồ sơ nguồn; report/Excel tách từng currency, không quy đổi. Legacy giữ NULL vì chưa lưu mã tại thời điểm tính: báo cáo từ chối với PAYROLL_CURRENCY_UNAVAILABLE cho tới khi HR xác minh, không tự gán VND từ hồ sơ hiện tại. Công thức lương/thuế hiện hữu không thay đổi; đây là lưu/xuất snapshot, không bổ sung cách tính lương quốc tế.
+Migration `d9e0f1a2b3c4` thêm currency_code vào PayrollLine snapshot. Tính lương mới chép mã từ hồ sơ nguồn; report/Excel tách từng currency, không quy đổi. Legacy giữ NULL vì chưa lưu mã tại thời điểm tính: báo cáo từ chối với PAYROLL_CURRENCY_UNAVAILABLE cho tới khi HR xác minh, không tự gán VND từ hồ sơ hiện tại. Công thức lương/thuế hiện hữu không thay đổi; đây là lưu/xuất snapshot, không bổ sung cách tính lương quốc tế. Chuỗi migration từ schema upstream tới head đã chạy thành công trên PostgreSQL 16 với DB thử nghiệm riêng, ban đầu trống; Backfill đã kiểm chứng với fixture tài liệu legacy DRAFT/PUBLISHED/ARCHIVED/trạng thái lạ và snapshot lương có sẵn: giữ nội dung, quyền, timestamps và số tiền; currency legacy vẫn NULL. Luồng nộp, duyệt/từ chối phép đã đạt qua Edge, API thật và PostgreSQL thử nghiệm; số dư chỉ trừ cho đơn APPROVED. Tái chạy bằng [check_leave_integration.py](backend/scripts/check_leave_integration.py); dữ liệu thực tế của từng môi trường chưa được rà soát bằng kiểm thử này.
 
 ReportRun lưu `GENERATING → READY/FAILED` bằng giao dịch riêng; chỉ READY sau khi lưu cả snapshot và XLSX. Phạm vi nhân viên được chốt trước truy vấn, giao với quyền hiện thời; preview/download kiểm lại toàn bộ phạm vi. Lịch sử hiển thị lỗi thất bại bằng mã an toàn, không chứa chi tiết DB hoặc đường dẫn private. Cleanup mặc định chỉ xem trước; `--apply` dọn artifacts hết hạn và giữ trạng thái FAILED trong lịch sử 30 ngày. Luồng DB thực tế vẫn cần nghiệm thu.
 
@@ -517,16 +517,16 @@ API sử dụng tiền tố `/api/v1`. Toàn bộ API yêu cầu xác thực JWT
 | **Kiosk Quẹt thẻ QR** | Kiosk Web Camera | `POST /attendance/scans` (yêu cầu Kiosk-Token & idempotency-key) |
 | **Bảng chấm công** | Nhân viên, Quản lý, HR | `GET /attendance/records`, `GET /attendance/records/{attendanceDayId}` |
 | **Giải trình Chấm công** | Nhân viên, Quản lý trực tiếp | `POST /attendance/fixes`, `GET /attendance/fixes`, `POST /attendance/fixes/{id}/approve`, `POST /attendance/fixes/{id}/reject` |
-| **Đơn xin Nghỉ phép** | Nhân viên, Quản lý trực tiếp | `POST /leave-requests`, `GET /leave-requests`, `POST /leave-requests/{id}/approve`, `POST /leave-requests/{id}/reject` |
-| **Số dư Phép năm** | Nhân viên, Quản lý, HR | `GET /leave-balances/me`, `GET /employees/{id}/leave-balance` |
-| **Chính sách Nghỉ phép** | HR, ADMIN | `GET /leave-types`, `POST /leave-types`, `PATCH /leave-types/{id}` |
+| **Đơn xin Nghỉ phép** | Nhân viên, Quản lý trực tiếp | `POST /leaves/requests`, `GET /leaves/requests?view=mine\|approvals\|visible`, `POST /leaves/requests/{request_id}/review` với `status=APPROVED` hoặc `REJECTED`, `review_note` tùy chọn |
+| **Số dư Phép năm** | Nhân viên, Quản lý, HR | `GET /leaves/balances/me`, `GET /leaves/balances/employees/{employee_id}` |
+| **Chính sách Nghỉ phép** | Nhân viên đọc; HR, ADMIN quản trị theo kế hoạch | `GET /leaves/types` đã triển khai; thêm/sửa loại nghỉ chưa có endpoint |
 | **Hồ sơ Lương GROSS** | HR, ADMIN | `GET /employees/{id}/compensations`, `POST /employees/{id}/compensations` |
 | **Bảng lương & Xuất Excel** | HR, ADMIN; Nhân viên xem của mình | `POST /payroll-periods`, `GET /payroll-periods`, `POST /payroll-periods/{id}/calculate`, `POST /payroll-periods/{id}/close`, `GET /payroll-periods/{id}/export`, `GET /payroll/me/slips` |
 | **Trợ lý ảo AI Chatbot** ⭐ | Tất cả nhân viên, Quản lý | `POST /ai/chat` (xử lý hội thoại, RAG hỏi đáp & Function Calling tự tạo đơn) |
 
 ### Các quy tắc xử lý API trọng yếu
 1. **Duyệt đơn:** Chỉ tài khoản của Quản lý trực tiếp (`manager_employee_id`) được cấp quyền approve/reject đơn giải trình và nghỉ phép của cấp dưới. Tránh tình trạng người nộp tự duyệt đơn của chính mình.
-2. **Kiểm tra số dư phép:** Khi nhân viên gọi `POST /leave-requests` cho loại phép hưởng lương (`ANNUAL`), hệ thống phải kiểm tra `remaining_days >= requested_days`. Nếu không đủ, chặn request và yêu cầu đổi sang `UNPAID`.
+2. **Kiểm tra số dư phép:** Khi nhân viên gọi `POST /leaves/requests` cho loại phép hưởng lương (`ANNUAL`), hệ thống phải kiểm tra `remaining_days >= requested_days`. Nếu không đủ, chặn request và yêu cầu đổi sang `UNPAID`.
 3. **Chặn sửa ngày lễ quá khứ:** API `PATCH/DELETE /holidays/{id}` bắt buộc từ chối nếu `holiday_date < CURRENT_DATE`.
 4. **Hạn chốt giải trình công:** Các yêu cầu giải trình công cho tháng cũ chỉ được duyệt trước thời điểm HR chốt kỳ lương (`CLOSED`). Sau khi kỳ đã đóng, mọi giải trình chưa duyệt đều tự động coi như không hợp lệ.
 5. **Function Calling của AI:** Endpoint `POST /ai/chat` khi nhận intent tạo đơn (nghỉ phép/giải trình) sẽ kích hoạt công cụ nội bộ gọi trực tiếp service tương ứng với đầy đủ bước validate, trả về kết quả kèm mã đơn để người dùng xác nhận.

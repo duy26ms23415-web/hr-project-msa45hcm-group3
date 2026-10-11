@@ -129,7 +129,7 @@ def api_context(monkeypatch):
     app.include_router(ai.router, prefix="/ai")
     app.include_router(knowledge.router, prefix="/ai/knowledge")
     app.include_router(reports.router, prefix="/reports")
-    app.include_router(leaves.router, prefix="/leave")
+    app.include_router(leaves.router, prefix="/leaves")
     app.include_router(attendance.router, prefix="/attendance")
     user = SimpleNamespace(employee_id=7, user_account_id=9, role_assignments=[SimpleNamespace(role=SimpleNamespace(role_code="EMPLOYEE"))])
     db = AsyncMock()
@@ -372,7 +372,7 @@ async def test_approval_views_filter_current_direct_reports(api_context):
     user.role_assignments[0].role.role_code = "MANAGER"
     db.execute.return_value = SimpleNamespace(scalars=lambda: SimpleNamespace(all=lambda: []))
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        assert (await client.get('/leave/requests?view=approvals')).status_code == 200
+        assert (await client.get('/leaves/requests?view=approvals')).status_code == 200
         leave_query = str(db.execute.call_args.args[0].compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}))
         assert "hr_employees.manager_employee_id = 7" in leave_query
         assert "hr_leave_requests.status = 'PENDING'" in leave_query
@@ -382,6 +382,79 @@ async def test_approval_views_filter_current_direct_reports(api_context):
         assert "hr_employees.manager_employee_id = 7" in attendance_query
         assert "hr_attendance_fixes.status = 'PENDING'" in attendance_query
         assert "reviewer_employee_id =" not in attendance_query
+
+
+def test_production_leave_routes_match_frontend_contract():
+    from app.api.v1.api import api_router
+    app = FastAPI()
+    app.include_router(api_router, prefix="/api/v1")
+    paths = app.openapi()["paths"]
+    assert "get" in paths["/api/v1/leaves/balances/me"]
+    assert "get" in paths["/api/v1/leaves/types"]
+    assert {"get", "post"} <= paths["/api/v1/leaves/requests"].keys()
+    assert "post" in paths["/api/v1/leaves/requests/{request_id}/review"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("decision", ["APPROVED", "REJECTED"])
+async def test_leave_review_endpoint_preserves_decision_and_authenticated_reviewer(api_context, monkeypatch, decision):
+    from datetime import date
+    from decimal import Decimal
+    app, user, db = api_context
+    user.role_assignments[0].role.role_code = "MANAGER"
+    request = SimpleNamespace(
+        leave_request_id=2, employee_id=20, leave_type_id=1,
+        leave_date=date(2026, 10, 12), session="FULL_DAY", leave_days=Decimal("1.00"),
+        status=decision, created_at=datetime.now(timezone.utc),
+    )
+    review = AsyncMock(return_value=request)
+    monkeypatch.setattr(leaves.LeaveService, "review_leave_request", review)
+    db.execute.return_value = SimpleNamespace(scalar_one=lambda: request)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post('/leaves/requests/2/review', json={"status": decision, "review_note": "Reviewed"})
+    assert response.status_code == 200 and response.json()["status"] == decision
+    session, request_id, reviewer_id, payload = review.await_args.args
+    assert session is db and request_id == 2 and reviewer_id == user.employee_id
+    assert payload.status == decision and payload.review_note == "Reviewed"
+    db.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("payload", [{}, {"status": "PENDING"}])
+async def test_leave_review_rejects_missing_or_invalid_decision(api_context, payload):
+    app, user, db = api_context
+    user.role_assignments[0].role.role_code = "MANAGER"
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        assert (await client.post('/leaves/requests/2/review', json=payload)).status_code == 422
+    db.execute.assert_not_awaited()
+    db.commit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("decision", ["APPROVED", "REJECTED"])
+async def test_employee_cannot_call_leave_review(api_context, decision):
+    app, _, db = api_context
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        assert (await client.post('/leaves/requests/2/review', json={"status": decision})).status_code == 403
+    db.execute.assert_not_awaited()
+    db.commit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("employee_id,manager_id", [(7, 7), (20, 30)])
+async def test_leave_review_endpoint_rejects_self_or_other_manager(api_context, employee_id, manager_id):
+    app, user, db = api_context
+    user.role_assignments[0].role.role_code = "MANAGER"
+    request = SimpleNamespace(leave_request_id=2, employee_id=employee_id, status="PENDING")
+    db.execute.side_effect = [
+        SimpleNamespace(scalar_one_or_none=lambda: request),
+        SimpleNamespace(scalar_one_or_none=lambda: SimpleNamespace(manager_employee_id=manager_id)),
+    ]
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        assert (await client.post('/leaves/requests/2/review', json={"status": "REJECTED"})).status_code == 403
+    assert request.status == "PENDING"
+    db.flush.assert_not_awaited()
+    db.commit.assert_not_awaited()
 
 
 @pytest.mark.asyncio
