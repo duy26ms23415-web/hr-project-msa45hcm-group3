@@ -59,19 +59,25 @@ async def get_employee_qr_cards(
     db: AsyncSession = Depends(get_db),
     current_user: UserAccount = Depends(require_roles(["HR", "ADMIN", "MANAGER"]))
 ):
-    """List issued QR cards for employee (auto-issue if none exists)"""
+    """Read QR cards within the caller's employee scope; issuance uses POST."""
+    employee = (await db.execute(
+        select(Employee).where(Employee.employee_id == employee_id)
+    )).scalar_one_or_none()
+    if not employee:
+        raise HTTPException(status_code=404, detail="Không tìm thấy nhân viên")
+    role_codes = {assignment.role.role_code for assignment in current_user.role_assignments}
+    if not role_codes.intersection({"ADMIN", "HR"}) and (
+        current_user.employee_id is None
+        or (employee.employee_id != current_user.employee_id
+            and employee.manager_employee_id != current_user.employee_id)
+    ):
+        raise HTTPException(status_code=404, detail="Không tìm thấy nhân viên")
     stmt = select(QRCard).where(
         and_(QRCard.employee_id == employee_id, QRCard.revoked_at.is_(None))
     ).order_by(QRCard.issued_at.desc())
     result = await db.execute(stmt)
     cards = result.scalars().all()
     
-    if not cards:
-        new_card, _ = await AttendanceService.issue_qr_card(db, employee_id, current_user.user_account_id)
-        await db.commit()
-        await db.refresh(new_card)
-        cards = [new_card]
-
     return cards
 
 

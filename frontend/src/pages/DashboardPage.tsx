@@ -21,7 +21,7 @@ const { Title, Text, Paragraph } = Typography;
 export const DashboardPage: React.FC = () => {
   const { user, hasRole } = useAuth();
   const navigate = useNavigate();
-  const showEmployeeIdentity = hasRole(['ADMIN', 'MANAGER']);
+  const showEmployeeIdentity = hasRole(['ADMIN', 'HR', 'MANAGER']);
   const [employeesById, setEmployeesById] = useState<Record<number, Employee>>({});
   const [balance, setBalance] = useState<LeaveBalance | null>(null);
   const [todayRecord, setTodayRecord] = useState<AttendanceRecord | null>(null);
@@ -39,7 +39,7 @@ export const DashboardPage: React.FC = () => {
       if (showEmployeeIdentity) {
         const [employeesRes, ownProfileRes] = await Promise.all([
           api.get<Employee[]>('/employees').catch(() => null),
-          hasRole(['MANAGER']) && user?.employee_id != null
+          hasRole(['MANAGER']) && !hasRole(['ADMIN', 'HR']) && user?.employee_id != null
             ? api.get<Employee>(`/employees/${user.employee_id}`).catch(() => null)
             : Promise.resolve(null),
         ]);

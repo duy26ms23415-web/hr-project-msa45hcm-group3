@@ -37,7 +37,7 @@ const { Title, Text } = Typography;
 export const AttendancePage: React.FC = () => {
   const { user, hasRole } = useAuth();
   const [activeTab, setActiveTab] = useState('records');
-  const showEmployeeIdentity = hasRole(['ADMIN', 'MANAGER']);
+  const showEmployeeIdentity = hasRole(['ADMIN', 'HR', 'MANAGER']);
   const [employeesById, setEmployeesById] = useState<Record<number, Employee>>({});
   const [records, setRecords] = useState<AttendanceRecord[]>([]);
   const [myFixes, setMyFixes] = useState<AttendanceFix[]>([]);
@@ -79,7 +79,7 @@ export const AttendancePage: React.FC = () => {
       const [res, employeesRes, ownProfileRes] = await Promise.all([
         api.get('/attendance/records'),
         showEmployeeIdentity ? api.get<Employee[]>('/employees').catch(() => null) : Promise.resolve(null),
-        hasRole(['MANAGER']) && user?.employee_id != null
+        hasRole(['MANAGER']) && !hasRole(['ADMIN', 'HR']) && user?.employee_id != null
           ? api.get<Employee>(`/employees/${user.employee_id}`).catch(() => null)
           : Promise.resolve(null),
       ]);

@@ -193,10 +193,13 @@ async def update_employee(
     is_demo = emp.email.lower() in DEMO_EMAILS or (account and account.login_email.lower() in DEMO_EMAILS)
     if is_demo and (
         emp_update.new_password is not None
-        or ("email" in update_data and str(update_data["email"]) != emp.email)
+        or ("email" in update_data and str(update_data["email"]).lower() != emp.email.lower())
         or ("employment_status" in update_data and update_data["employment_status"] != emp.employment_status)
     ):
         raise HTTPException(status_code=400, detail="Không được đổi email, mật khẩu hoặc trạng thái của tài khoản demo")
+    # Preserve the original demo login email even if only capitalization changed.
+    if is_demo and "email" in update_data:
+        update_data.pop("email")
     employee_role = None
     if emp_update.new_password is not None and not account:
         login_email = str(update_data.get("email", emp.email))

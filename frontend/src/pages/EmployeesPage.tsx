@@ -39,6 +39,10 @@ export const EmployeesPage: React.FC = () => {
   const isAdminOrHR = hasRole(['ADMIN', 'HR']);
 
   const [employees, setEmployees] = useState<Employee[]>([]);
+  const [accountFilter, setAccountFilter] = useState<'with' | 'without' | 'all'>('with');
+  const visibleEmployees = employees.filter((employee) =>
+    accountFilter === 'all' || (accountFilter === 'with' ? employee.has_login_account : !employee.has_login_account)
+  );
   const [departments, setDepartments] = useState<any[]>([]);
   const [positions, setPositions] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
@@ -100,12 +104,12 @@ export const EmployeesPage: React.FC = () => {
       onOk: async () => {
         try {
           await api.delete(`/employees/${employee.employee_id}/account`);
-          setEmployees((current) => current.filter((item) => item.employee_id !== employee.employee_id));
+          setEmployees((current) => current.map((item) => item.employee_id === employee.employee_id ? { ...item, has_login_account: false } : item));
           message.success('Đã xóa tài khoản và ẩn nhân viên khỏi danh sách.');
           await fetchEmployees();
         } catch (err: any) {
           if (err.response?.status === 404) {
-            setEmployees((current) => current.filter((item) => item.employee_id !== employee.employee_id));
+            setEmployees((current) => current.map((item) => item.employee_id === employee.employee_id ? { ...item, has_login_account: false } : item));
             message.info('Tài khoản đã được xóa. Nhân viên không còn hiển thị trong danh sách.');
             await fetchEmployees();
             return;
@@ -124,6 +128,7 @@ export const EmployeesPage: React.FC = () => {
   const [qrCard, setQrCard] = useState<any | null>(null);
   const [loadingQr, setLoadingQr] = useState(false);
   const [qrError, setQrError] = useState<string | null>(null);
+  const [issuingQr, setIssuingQr] = useState(false);
   const qrRequestRef = useRef(0);
 
   const closeQrModal = () => {
@@ -137,8 +142,7 @@ export const EmployeesPage: React.FC = () => {
     try {
       setLoading(true);
       const res = await api.get<Employee[]>('/employees');
-      // Keep profile data in the API for attendance history; show login accounts here.
-      setEmployees(res.data.filter((employee) => employee.has_login_account));
+      setEmployees(res.data);
     } catch (e) {
       console.error(e);
       setEmployees([]);
@@ -230,6 +234,30 @@ export const EmployeesPage: React.FC = () => {
     }
   };
 
+  const handleIssueQR = async () => {
+    if (!isAdminOrHR || !selectedEmployee || issuingQr || loadingQr) return;
+    const employeeId = selectedEmployee.employee_id;
+    const requestId = ++qrRequestRef.current;
+    setIssuingQr(true);
+    setQrError(null);
+    try {
+      const res = await api.post<QRCard>(`/attendance/employees/${employeeId}/qr-cards`);
+      if (requestId !== qrRequestRef.current) return;
+      if (res.data.employee_id !== employeeId || !res.data.card_code) {
+        setQrError('Không nhận được thẻ QR hợp lệ. Vui lòng tải lại thẻ.');
+        return;
+      }
+      setQrCard(res.data);
+      message.success('Đã cấp thẻ QR mới. Vui lòng sử dụng mã vừa hiển thị.');
+    } catch (err: any) {
+      if (requestId !== qrRequestRef.current) return;
+      const detail = err.response?.data?.detail;
+      setQrError(typeof detail === 'string' ? detail : 'Không cấp được thẻ QR. Vui lòng thử lại.');
+    } finally {
+      setIssuingQr(false);
+    }
+  };
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
       {/* Header bar */}
@@ -263,23 +291,28 @@ export const EmployeesPage: React.FC = () => {
         )}
       </div>
 
+      <Space>
+        <Text>Trạng thái tài khoản:</Text>
+        <Select
+          value={accountFilter}
+          onChange={setAccountFilter}
+          style={{ width: 190 }}
+          options={[
+            { value: 'with', label: 'Có tài khoản' },
+            { value: 'without', label: 'Chưa có tài khoản' },
+            { value: 'all', label: 'Tất cả nhân viên' },
+          ]}
+        />
+      </Space>
+
       {/* Employees Table */}
       <Card bordered={false} style={{ borderRadius: 12, boxShadow: '0 2px 8px rgba(0,0,0,0.04)' }}>
         <Table
-          dataSource={employees}
+          dataSource={visibleEmployees}
           rowKey="employee_id"
           loading={loading}
-          locale={{ emptyText: isAdminOrHR ? 'Chưa có nhân viên' : 'Chưa có nhân viên được phân công cho bạn' }}
+          locale={{ emptyText: 'Không có nhân viên phù hợp với bộ lọc trong phạm vi quản lý.' }}
           columns={[
-            ...(isAdmin ? [{
-              title: 'Tài khoản đăng nhập',
-              key: 'login_account_status',
-              render: (_: unknown, record: Employee) => (
-                <Tag color={record.has_login_account ? 'blue' : 'default'}>
-                  {record.has_login_account ? 'Có tài khoản' : 'Chưa có tài khoản'}
-                </Tag>
-              ),
-            }] : []),
             ...(isAdmin ? [{
               title: 'Thao tác',
               key: 'edit_employee',
@@ -597,7 +630,12 @@ export const EmployeesPage: React.FC = () => {
         })()}
 
         <div style={{ marginTop: 20 }}>
-          <Button type="primary" block onClick={closeQrModal}>
+          {isAdminOrHR && !loadingQr && !qrCard?.card_code && (
+            <Button type="primary" block loading={issuingQr} onClick={handleIssueQR} style={{ marginBottom: 8 }}>
+              Cấp thẻ QR
+            </Button>
+          )}
+          <Button block onClick={closeQrModal}>
             Đóng
           </Button>
         </div>
