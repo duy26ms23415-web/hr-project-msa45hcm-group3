@@ -128,12 +128,18 @@ class LeaveService:
         if req.status != "PENDING":
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Request is already {req.status}")
 
-        # Manager authority check: direct manager or department manager
+        # Lock the employee row so reassignment cannot race the authorization check and commit.
+        employee = (await db.execute(
+            select(Employee).where(Employee.employee_id == req.employee_id).options(selectinload(Employee.department)).with_for_update()
+        )).scalar_one_or_none()
+        if not employee:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Employee not found")
+
         is_direct_manager = (
-            req.employee.manager_employee_id == reviewer_employee_id
-            or (req.employee.department and req.employee.department.manager_employee_id == reviewer_employee_id)
+            employee.manager_employee_id == reviewer_employee_id
+            or (getattr(employee, "department", None) and employee.department.manager_employee_id == reviewer_employee_id)
         )
-        if not is_admin and not is_direct_manager:
+        if req.employee_id == reviewer_employee_id or (not is_admin and not is_direct_manager):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Only the direct manager can approve or reject this leave request"
