@@ -374,6 +374,22 @@ export const EmployeesPage: React.FC = () => {
               render: (p) => p?.position_name || 'Chuyên viên',
             },
             {
+              title: 'Quản lý trực tiếp',
+              dataIndex: 'manager',
+              key: 'manager',
+              render: (manager) =>
+                manager ? (
+                  <span>
+                    {manager.full_name}{' '}
+                    <Tag color="cyan" style={{ marginLeft: 4 }}>
+                      {manager.employee_code}
+                    </Tag>
+                  </span>
+                ) : (
+                  <span style={{ color: '#8c8c8c' }}>-</span>
+                ),
+            },
+            {
               title: 'Trạng thái',
               dataIndex: 'employment_status',
               key: 'employment_status',

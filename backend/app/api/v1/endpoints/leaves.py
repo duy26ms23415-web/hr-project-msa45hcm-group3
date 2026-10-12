@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.api.deps import get_current_user, require_roles
 from app.models.auth import UserAccount
+from app.models.organization import Employee, Department
 from app.models.leave import LeaveType, LeaveRequest, EmployeeLeaveBalance
 from app.models.organization import Employee
 from app.schemas.leave import (
@@ -22,20 +23,32 @@ router = APIRouter()
 
 @router.get("/types", response_model=List[LeaveTypeResponse])
 async def list_leave_types(db: AsyncSession = Depends(get_db)):
-    """List all active leave types (auto-ensures REMOTE type exists)"""
+    """List all active leave types (auto-ensures standard types exist)"""
+    default_types = [
+        ("ANNUAL", "Nghỉ phép năm", True),
+        ("UNPAID", "Nghỉ không hưởng lương", False),
+        ("SICK", "Nghỉ ốm đau", True),
+        ("REMOTE", "Làm việc từ xa (Remote / WFH)", True),
+    ]
     result = await db.execute(select(LeaveType).where(LeaveType.is_active == True))
     types = list(result.scalars().all())
-    if not any(t.leave_code == "REMOTE" for t in types):
-        remote_type = LeaveType(
-            leave_code="REMOTE",
-            leave_name="Làm việc từ xa (Remote / WFH)",
-            is_paid=True,
-            is_active=True
-        )
-        db.add(remote_type)
+    existing_codes = {t.leave_code for t in types}
+    created = False
+    for code, name, is_paid in default_types:
+        if code not in existing_codes:
+            lt = LeaveType(
+                leave_code=code,
+                leave_name=name,
+                is_paid=is_paid,
+                is_active=True
+            )
+            db.add(lt)
+            created = True
+            types.append(lt)
+    if created:
         await db.commit()
-        await db.refresh(remote_type)
-        types.append(remote_type)
+        for t in types:
+            await db.refresh(t)
     return types
 
 
@@ -80,7 +93,10 @@ async def submit_leave_request(
     stmt = (
         select(LeaveRequest)
         .where(LeaveRequest.leave_request_id == leave_req.leave_request_id)
-        .options(selectinload(LeaveRequest.leave_type))
+        .options(
+            selectinload(LeaveRequest.leave_type),
+            selectinload(LeaveRequest.employee)
+        )
     )
     reloaded = (await db.execute(stmt)).scalar_one()
     return reloaded
@@ -89,11 +105,13 @@ async def submit_leave_request(
 @router.get("/requests", response_model=List[LeaveRequestResponse])
 async def list_leave_requests(
     status_filter: Optional[str] = Query(None, alias="status"),
-    view: Literal["mine", "approvals", "visible"] = "mine",
+    employee_id: Optional[int] = Query(None),
+    view: Optional[Literal["mine", "approvals", "visible"]] = None,
+    mine: Optional[bool] = Query(None),
     db: AsyncSession = Depends(get_db),
     current_user: UserAccount = Depends(get_current_user)
 ):
-    """List leave requests (Employee views own, Manager views subordinate's)"""
+    """List leave requests (Employee views own, Manager views subordinate's and own)"""
     user_roles = [ra.role.role_code for ra in current_user.role_assignments]
     role_set = set(user_roles)
     require_known_role(role_set)
@@ -106,23 +124,53 @@ async def list_leave_requests(
         .order_by(LeaveRequest.created_at.desc())
     )
 
-    if view == "mine":
+    if mine is True or view == "mine":
         stmt = stmt.where(LeaveRequest.employee_id == current_user.employee_id)
     elif view == "approvals":
         require_reviewer_role(role_set)
         if status_filter not in (None, "PENDING"):
             raise HTTPException(status_code=422, detail="Approvals view only lists pending requests")
-        stmt = stmt.join(Employee, Employee.employee_id == LeaveRequest.employee_id).where(
-            Employee.manager_employee_id == current_user.employee_id,
+        direct_reports = (
+            select(Employee.employee_id)
+            .outerjoin(Department, Employee.department_id == Department.department_id)
+            .where(
+                (Employee.manager_employee_id == current_user.employee_id) |
+                (Department.manager_employee_id == current_user.employee_id)
+            )
+        )
+        stmt = stmt.where(
+            LeaveRequest.employee_id.in_(direct_reports),
             LeaveRequest.status == "PENDING",
         )
-    else:
-        if not set(user_roles) & {"ADMIN", "HR", "MANAGER"}:
-            raise HTTPException(status_code=403, detail="AI_ACCESS_DENIED")
-        if not set(user_roles) & {"ADMIN", "HR"}:
-            stmt = stmt.join(Employee, Employee.employee_id == LeaveRequest.employee_id).where(
-                Employee.manager_employee_id == current_user.employee_id
+    elif "ADMIN" in user_roles or "HR" in user_roles:
+        if employee_id is not None:
+            stmt = stmt.where(LeaveRequest.employee_id == employee_id)
+    elif "MANAGER" in user_roles:
+        direct_reports = (
+            select(Employee.employee_id)
+            .outerjoin(Department, Employee.department_id == Department.department_id)
+            .where(
+                (Employee.manager_employee_id == current_user.employee_id) |
+                (Department.manager_employee_id == current_user.employee_id)
             )
+        )
+        if employee_id is not None:
+            stmt = stmt.where(
+                (LeaveRequest.employee_id == employee_id) &
+                (
+                    (LeaveRequest.employee_id == current_user.employee_id) |
+                    LeaveRequest.employee_id.in_(direct_reports) |
+                    (LeaveRequest.reviewer_employee_id == current_user.employee_id)
+                )
+            )
+        else:
+            stmt = stmt.where(
+                (LeaveRequest.employee_id == current_user.employee_id) |
+                LeaveRequest.employee_id.in_(direct_reports) |
+                (LeaveRequest.reviewer_employee_id == current_user.employee_id)
+            )
+    else:
+        stmt = stmt.where(LeaveRequest.employee_id == current_user.employee_id)
 
     if status_filter:
         stmt = stmt.where(LeaveRequest.status == status_filter)
@@ -138,12 +186,81 @@ async def review_leave_request(
     db: AsyncSession = Depends(get_db),
     current_user: UserAccount = Depends(get_current_user)
 ):
-    """Direct Manager approves or rejects a leave request."""
-    require_reviewer_role({ra.role.role_code for ra in current_user.role_assignments})
+    """Direct Manager or Admin reviews (approve/reject) leave request"""
+    user_roles = [ra.role.role_code for ra in current_user.role_assignments]
+    is_admin = "ADMIN" in user_roles
+    require_reviewer_role(set(user_roles))
+
     req = await LeaveService.review_leave_request(
-        db, request_id, current_user.employee_id, review_in
+        db, request_id, current_user.employee_id, review_in, is_admin=is_admin
     )
     await db.commit()
     
-    stmt = select(LeaveRequest).where(LeaveRequest.leave_request_id == req.leave_request_id).options(selectinload(LeaveRequest.leave_type))
+    stmt = (
+        select(LeaveRequest)
+        .where(LeaveRequest.leave_request_id == req.leave_request_id)
+        .options(
+            selectinload(LeaveRequest.leave_type),
+            selectinload(LeaveRequest.employee)
+        )
+    )
     return (await db.execute(stmt)).scalar_one()
+
+
+@router.post("/requests/{request_id}/approve", response_model=LeaveRequestResponse)
+async def approve_leave_request(
+    request_id: int,
+    review_in: LeaveRequestReview,
+    db: AsyncSession = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user)
+):
+    """Direct Manager approves leave request"""
+    user_roles = [ra.role.role_code for ra in current_user.role_assignments]
+    is_admin = "ADMIN" in user_roles
+    require_reviewer_role(set(user_roles))
+
+    review_in.status = "APPROVED"
+    req = await LeaveService.review_leave_request(
+        db, request_id, current_user.employee_id, review_in, is_admin=is_admin
+    )
+    await db.commit()
+    
+    stmt = (
+        select(LeaveRequest)
+        .where(LeaveRequest.leave_request_id == req.leave_request_id)
+        .options(
+            selectinload(LeaveRequest.leave_type),
+            selectinload(LeaveRequest.employee)
+        )
+    )
+    return (await db.execute(stmt)).scalar_one()
+
+
+@router.post("/requests/{request_id}/reject", response_model=LeaveRequestResponse)
+async def reject_leave_request(
+    request_id: int,
+    review_in: LeaveRequestReview,
+    db: AsyncSession = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user)
+):
+    """Direct Manager rejects leave request"""
+    user_roles = [ra.role.role_code for ra in current_user.role_assignments]
+    is_admin = "ADMIN" in user_roles
+    require_reviewer_role(set(user_roles))
+
+    review_in.status = "REJECTED"
+    req = await LeaveService.review_leave_request(
+        db, request_id, current_user.employee_id, review_in, is_admin=is_admin
+    )
+    await db.commit()
+    
+    stmt = (
+        select(LeaveRequest)
+        .where(LeaveRequest.leave_request_id == req.leave_request_id)
+        .options(
+            selectinload(LeaveRequest.leave_type),
+            selectinload(LeaveRequest.employee)
+        )
+    )
+    return (await db.execute(stmt)).scalar_one()
+

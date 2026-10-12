@@ -503,7 +503,7 @@ export const KioskScanPage: React.FC = () => {
                   {lastScanResult.message || 'Chấm công thành công!'}
                 </div>
                 <div style={{ fontSize: 12, color: '#166534', marginTop: 2 }}>
-                  Loại quẹt: <b>{lastScanResult.event_type}</b> • Thời gian: {new Date(lastScanResult.event_time).toLocaleTimeString()}
+                  Loại quẹt: <b>{lastScanResult.event_type}</b> • Thời gian: {new Date(lastScanResult.event_time || lastScanResult.occurred_at).toLocaleTimeString([], { hour12: false })}
                 </div>
               </div>
             </div>

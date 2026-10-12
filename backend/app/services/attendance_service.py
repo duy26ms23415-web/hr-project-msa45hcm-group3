@@ -24,6 +24,7 @@ class AttendanceService:
     def calculate_worked_minutes(check_in: Optional[datetime], check_out: Optional[datetime]) -> int:
         """
         Calculate worked minutes within 08:00 - 17:00 excluding lunch break (12:00 - 13:00).
+        Times are normalized to Vietnam timezone (UTC+7).
         """
         if not check_in or not check_out:
             return 0
@@ -39,6 +40,7 @@ class AttendanceService:
         local_out = to_local(check_out)
         if local_out <= local_in:
             return 0
+
 
         work_date = local_in.date()
         window_start = datetime.combine(work_date, time(8, 0), tzinfo=local_timezone)
@@ -156,7 +158,7 @@ class AttendanceService:
         """Aggregate all valid scan/fix events for the employee on work_date"""
         # Fetch all events on this date (converted to local date UTC+7)
         day_start_utc = datetime.combine(work_date, time(0, 0), tzinfo=timezone.utc) - timedelta(hours=7)
-        day_end_utc = datetime.combine(work_date, time(23, 59, 59), tzinfo=timezone.utc) - timedelta(hours=7)
+        day_end_utc = datetime.combine(work_date, time(23, 59, 59, 999999), tzinfo=timezone.utc) - timedelta(hours=7)
 
         stmt = select(AttendanceEvent).where(
             and_(
@@ -267,23 +269,25 @@ class AttendanceService:
         db: AsyncSession,
         fix_id: int,
         reviewer_employee_id: int,
-        review_in: AttendanceFixReview
+        review_in: AttendanceFixReview,
+        is_admin: bool = False
     ) -> AttendanceFix:
-        """Review attendance fix. Only the employee's direct manager may review."""
-        stmt = select(AttendanceFix).where(AttendanceFix.attendance_fix_id == fix_id)
+        """Review attendance fix. Must be the employee's direct manager or admin."""
+        stmt = select(AttendanceFix).where(AttendanceFix.attendance_fix_id == fix_id).options(
+            selectinload(AttendanceFix.employee).selectinload(Employee.department)
+        )
         fix = (await db.execute(stmt)).scalar_one_or_none()
         if not fix:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Attendance fix request not found")
         if fix.status != "PENDING":
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Request is already {fix.status}")
 
-        # Lock the employee row so reassignment cannot race the authorization check and commit.
-        employee = (await db.execute(
-            select(Employee).where(Employee.employee_id == fix.employee_id).with_for_update()
-        )).scalar_one_or_none()
-        if not employee:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Employee not found")
-        if fix.employee_id == reviewer_employee_id or employee.manager_employee_id != reviewer_employee_id:
+        # Manager authority check: direct manager or department manager
+        is_direct_manager = (
+            fix.employee.manager_employee_id == reviewer_employee_id
+            or (fix.employee.department and fix.employee.department.manager_employee_id == reviewer_employee_id)
+        )
+        if not is_admin and not is_direct_manager:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Only the direct manager can approve or reject this attendance fix"
@@ -311,12 +315,16 @@ class AttendanceService:
         fix.review_note = review_in.review_note
 
         if review_in.status == "APPROVED":
-            # Generate approved adjustment event
+            # Generate approved adjustment event (ensure UTC timestamp)
+            req_at = fix.requested_at
+            if req_at.tzinfo is None:
+                req_at = req_at.replace(tzinfo=timezone(timedelta(hours=7))).astimezone(timezone.utc)
+
             event = AttendanceEvent(
                 employee_id=fix.employee_id,
                 event_type=fix.event_type,
                 source="APPROVED_FIX",
-                occurred_at=fix.requested_at,
+                occurred_at=req_at,
                 idempotency_key=f"FIX-APPROVED-{fix.attendance_fix_id}-{secrets.token_hex(6)}",
                 attendance_fix_id=fix.attendance_fix_id
             )

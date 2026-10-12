@@ -52,6 +52,7 @@ frontend/dist-ssr/
 *.swo
 .DS_Store
 Thumbs.db
+pyrefly.toml
 
 # Database / Storage
 postgres_data/

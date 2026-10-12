@@ -89,7 +89,7 @@ export const LeavePage: React.FC = () => {
   const fetchMyRequests = async () => {
     try {
       setLoading(true);
-      const res = await api.get('/leaves/requests?view=mine');
+      const res = await api.get('/leaves/requests?mine=true');
       setMyRequests(res.data);
     } catch (e) {
       console.error(e);
@@ -102,8 +102,9 @@ export const LeavePage: React.FC = () => {
     if (!hasRole(['MANAGER', 'HR', 'ADMIN'])) return;
     try {
       setLoading(true);
-      const res = await api.get('/leaves/requests?view=approvals');
-      setPendingRequests(res.data);
+      const res = await api.get('/leaves/requests?status=PENDING');
+      const list = res.data.filter((r: LeaveRequest) => r.employee_id !== user?.employee_id);
+      setPendingRequests(list);
     } catch (e) {
       console.error(e);
     } finally {
@@ -113,6 +114,9 @@ export const LeavePage: React.FC = () => {
 
   useEffect(() => {
     fetchBalanceAndTypes();
+    if (hasRole(['MANAGER', 'ADMIN'])) {
+      fetchPendingRequests();
+    }
   }, []);
 
   useEffect(() => {
@@ -176,6 +180,9 @@ export const LeavePage: React.FC = () => {
           type="primary"
           icon={<PlusOutlined />}
           onClick={() => {
+            if (leaveTypes.length === 0) {
+              fetchBalanceAndTypes();
+            }
             form.resetFields();
             form.setFieldsValue({
               leave_date: dayjs().add(1, 'day'),
@@ -331,10 +338,19 @@ export const LeavePage: React.FC = () => {
                         loading={loading}
                         columns={[
                           {
-                            title: 'Mã NV',
-                            dataIndex: 'employee_id',
-                            key: 'employee_id',
-                            render: (id) => <Tag color="geekblue">NV#{id}</Tag>,
+                            title: 'Nhân viên',
+                            key: 'employee',
+                            render: (_, req: LeaveRequest) => (
+                              <div>
+                                <span style={{ fontWeight: 600 }}>{req.employee?.full_name || `Nhân viên #${req.employee_id}`}</span>
+                                <div style={{ fontSize: 12, color: '#64748b' }}>
+                                  <Tag color="geekblue" style={{ fontSize: 11, padding: '0 4px', marginRight: 4 }}>
+                                    {req.employee?.employee_code || `NV#${req.employee_id}`}
+                                  </Tag>
+                                  {req.employee?.email}
+                                </div>
+                              </div>
+                            ),
                           },
                           {
                             title: 'Ngày nghỉ',
@@ -428,7 +444,7 @@ export const LeavePage: React.FC = () => {
             label="Loại đơn"
             rules={[{ required: true, message: 'Vui lòng chọn loại đơn!' }]}
           >
-            <Select>
+            <Select placeholder="-- Chọn loại đơn xin nghỉ / làm việc từ xa --" loading={leaveTypes.length === 0}>
               {leaveTypes.map((lt) => (
                 <Select.Option key={lt.leave_type_id} value={lt.leave_type_id}>
                   {lt.leave_name} {lt.leave_code === 'REMOTE' ? '(Hưởng 100% lương • Không trừ phép năm)' : lt.is_paid ? '(Hưởng lương)' : '(Không hưởng lương)'}

@@ -110,6 +110,14 @@ class EmployeeUpdate(BaseModel):
         return value
 
 
+class ManagerBriefResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    employee_id: int
+    employee_code: str
+    full_name: str
+    email: EmailStr
+
+
 class EmployeeResponse(EmployeeBase):
     model_config = ConfigDict(from_attributes=True)
 
@@ -128,6 +136,7 @@ class EmployeeResponse(EmployeeBase):
     updated_at: datetime
     department: Optional[DepartmentResponse] = None
     position: Optional[PositionResponse] = None
+    manager: Optional[ManagerBriefResponse] = None
 
 
 class EmployeePasswordReset(BaseModel):
@@ -139,3 +148,4 @@ class EmployeePasswordReset(BaseModel):
         if len(value.encode("utf-8")) > 72:
             raise ValueError("Mật khẩu không được vượt quá 72 byte UTF-8")
         return value
+

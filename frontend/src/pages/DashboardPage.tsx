@@ -68,9 +68,11 @@ export const DashboardPage: React.FC = () => {
           api.get('/leaves/requests?status=PENDING').catch(() => ({ data: [] })),
           api.get('/attendance/fixes?status=PENDING').catch(() => ({ data: [] })),
         ]);
+        const pendingLeaves = (leavesRes.data || []).filter((r: any) => r.employee_id !== user?.employee_id);
+        const pendingFixes = (fixesRes.data || []).filter((f: any) => f.employee_id !== user?.employee_id);
         setPendingApprovals({
-          leaves: leavesRes.data.length || 0,
-          fixes: fixesRes.data.length || 0,
+          leaves: pendingLeaves.length,
+          fixes: pendingFixes.length,
         });
       }
     } catch (e) {

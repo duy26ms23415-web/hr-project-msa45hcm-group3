@@ -370,7 +370,7 @@ Chịu trách nhiệm thẩm định (Validation), lọc bỏ dữ liệu nhạy
   * `employees.py`: Danh sách nhân viên, thông tin chi tiết và tạo mới nhân sự (`/employees`).
   * `departments.py`: Quản lý danh mục phòng ban và chức danh (`/departments`).
   * `attendance.py`: Quẹt thẻ Kiosk tự động Check-in/Check-out (`/kiosk/scan`), bảng công, giải trình (`/fixes`) và cấp thẻ QR (`/qr-cards`).
-  * `leaves.py`: Nộp đơn xin nghỉ, danh sách đơn cá nhân, danh sách đơn cần duyệt của quản lý (`/leave/requests`).
+  * `leaves.py`: Nộp đơn xin nghỉ, danh sách đơn cá nhân, danh sách đơn cần duyệt của quản lý (`/leaves/requests`).
   * `payroll.py`: Tạo kỳ lương, tính lương, khóa kỳ, tải file Excel và xem phiếu lương cá nhân (`/payroll`).
   * `holidays.py`: Cấu hình danh mục ngày nghỉ lễ (`/holidays`).
   * `ai.py`: Giao tiếp với Trợ lý AI hỏi đáp chính sách và tra cứu công (`/ai/chat`).

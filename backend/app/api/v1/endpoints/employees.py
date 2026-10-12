@@ -29,7 +29,8 @@ async def list_employees(
     stmt = select(Employee).options(
         selectinload(Employee.department),
         selectinload(Employee.position),
-        selectinload(Employee.user_account)
+        selectinload(Employee.user_account),
+        selectinload(Employee.manager)
     )
     user_roles = {assignment.role.role_code for assignment in current_user.role_assignments}
     if not user_roles.intersection({"ADMIN", "HR"}):
@@ -97,7 +98,7 @@ async def create_employee(
     employee_role = None
     if emp_in.login_password is not None:
         account = (await db.execute(
-            select(UserAccount).where(UserAccount.login_email == str(emp_in.email))
+            select(UserAccount).where(UserAccount.login_email == emp_in.email)
         )).scalar_one_or_none()
         if account:
             raise HTTPException(status_code=409, detail="Email đăng nhập đã tồn tại")
@@ -111,10 +112,10 @@ async def create_employee(
     try:
         db.add(emp)
         await db.flush()
-        if emp_in.login_password is not None:
+        if emp_in.login_password is not None and employee_role is not None:
             account = UserAccount(
                 employee_id=emp.employee_id,
-                login_email=str(emp_in.email),
+                login_email=emp_in.email,
                 password_hash=get_password_hash(emp_in.login_password),
                 is_active=emp.employment_status == "ACTIVE",
             )

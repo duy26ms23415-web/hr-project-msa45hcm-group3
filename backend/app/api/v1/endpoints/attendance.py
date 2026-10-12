@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.api.deps import get_current_user, require_roles, verify_kiosk_secret
 from app.models.auth import UserAccount
-from app.models.organization import Employee
+from app.models.organization import Employee, Department
 from app.models.attendance import AttendanceDay, AttendanceFix, QRCard, AttendanceEvent
 from app.schemas.attendance import (
     QRCardCreateResponse, QRCardResponse,
@@ -124,7 +124,7 @@ async def process_kiosk_scan_direct(
     now_utc = datetime.now(timezone.utc)
     local_date = (now_utc + timedelta(hours=7)).date()
     day_start_utc = datetime.combine(local_date, time(0, 0), tzinfo=timezone.utc) - timedelta(hours=7)
-    day_end_utc = datetime.combine(local_date, time(23, 59, 59), tzinfo=timezone.utc) - timedelta(hours=7)
+    day_end_utc = datetime.combine(local_date, time(23, 59, 59, 999999), tzinfo=timezone.utc) - timedelta(hours=7)
 
     stmt_ev = select(AttendanceEvent).where(
         and_(
@@ -135,7 +135,8 @@ async def process_kiosk_scan_direct(
     ).order_by(AttendanceEvent.occurred_at.desc())
     latest_event = (await db.execute(stmt_ev)).scalars().first()
 
-    event_type = "CHECK_OUT" if (latest_event and latest_event.event_type == "CHECK_IN") else "CHECK_IN"
+    # Nguyên tắc: Lần scan đầu tiên trong ngày luôn là CHECK_IN. Các lần sau đều là CHECK_OUT
+    event_type = "CHECK_OUT" if latest_event else "CHECK_IN"
 
     idempotency_key = f"SCAN-{qr_card.employee_id}-{event_type}-{int(now_utc.timestamp() // 15)}"
     scan_req = ScanRequest(
@@ -252,7 +253,8 @@ async def create_attendance_fix(
 @router.get("/fixes", response_model=List[AttendanceFixResponse])
 async def list_attendance_fixes(
     status_filter: Optional[str] = Query(None, alias="status"),
-    view: Literal["mine", "approvals", "visible"] = "mine",
+    view: Optional[Literal["mine", "approvals", "visible"]] = None,
+    mine: Optional[bool] = Query(None),
     db: AsyncSession = Depends(get_db),
     current_user: UserAccount = Depends(get_current_user)
 ):
@@ -260,25 +262,49 @@ async def list_attendance_fixes(
     user_roles = [ra.role.role_code for ra in current_user.role_assignments]
     role_set = set(user_roles)
     require_known_role(role_set)
-    stmt = select(AttendanceFix).order_by(AttendanceFix.created_at.desc())
+    stmt = (
+        select(AttendanceFix)
+        .options(selectinload(AttendanceFix.employee))
+        .order_by(AttendanceFix.created_at.desc())
+    )
 
-    if view == "mine":
+    if mine is True or view == "mine":
         stmt = stmt.where(AttendanceFix.employee_id == current_user.employee_id)
     elif view == "approvals":
         require_reviewer_role(role_set)
         if status_filter not in (None, "PENDING"):
             raise HTTPException(status_code=422, detail="Approvals view only lists pending requests")
-        stmt = stmt.join(Employee, Employee.employee_id == AttendanceFix.employee_id).where(
-            Employee.manager_employee_id == current_user.employee_id,
+        direct_reports = (
+            select(Employee.employee_id)
+            .outerjoin(Department, Employee.department_id == Department.department_id)
+            .where(
+                (Employee.manager_employee_id == current_user.employee_id) |
+                (Department.manager_employee_id == current_user.employee_id)
+            )
+        )
+        stmt = stmt.where(
+            AttendanceFix.employee_id.in_(direct_reports),
             AttendanceFix.status == "PENDING",
         )
-    else:
-        if not role_set & {"ADMIN", "HR", "MANAGER"}:
-            raise HTTPException(status_code=403, detail="AI_ACCESS_DENIED")
-        if not role_set & {"ADMIN", "HR"}:
-            stmt = stmt.join(Employee, Employee.employee_id == AttendanceFix.employee_id).where(
-                Employee.manager_employee_id == current_user.employee_id
+    elif "ADMIN" in user_roles or "HR" in user_roles:
+        pass
+    elif "MANAGER" in user_roles:
+        direct_reports = (
+            select(Employee.employee_id)
+            .outerjoin(Department, Employee.department_id == Department.department_id)
+            .where(
+                (Employee.manager_employee_id == current_user.employee_id) |
+                (Department.manager_employee_id == current_user.employee_id)
             )
+        )
+        stmt = stmt.where(
+            (AttendanceFix.employee_id == current_user.employee_id) |
+            AttendanceFix.employee_id.in_(direct_reports) |
+            (AttendanceFix.reviewer_employee_id == current_user.employee_id)
+        )
+    else:
+        stmt = stmt.where(AttendanceFix.employee_id == current_user.employee_id)
+
 
     if status_filter:
         stmt = stmt.where(AttendanceFix.status == status_filter)
@@ -295,11 +321,10 @@ async def approve_attendance_fix(
     current_user: UserAccount = Depends(get_current_user)
 ):
     """Direct Manager approves attendance fix and recalculates day"""
-    require_reviewer_role({ra.role.role_code for ra in current_user.role_assignments})
-
+    is_admin = "ADMIN" in {ra.role.role_code for ra in current_user.role_assignments}
     review_in.status = "APPROVED"
     fix = await AttendanceService.review_fix_request(
-        db, fix_id, current_user.employee_id, review_in
+        db, fix_id, current_user.employee_id, review_in, is_admin=is_admin
     )
     await db.commit()
     await db.refresh(fix)
@@ -316,10 +341,12 @@ async def reject_attendance_fix(
     """Direct Manager rejects attendance fix"""
     require_reviewer_role({ra.role.role_code for ra in current_user.role_assignments})
 
+    is_admin = "ADMIN" in {ra.role.role_code for ra in current_user.role_assignments}
     review_in.status = "REJECTED"
     fix = await AttendanceService.review_fix_request(
-        db, fix_id, current_user.employee_id, review_in
+        db, fix_id, current_user.employee_id, review_in, is_admin=is_admin
     )
     await db.commit()
     await db.refresh(fix)
     return fix
+

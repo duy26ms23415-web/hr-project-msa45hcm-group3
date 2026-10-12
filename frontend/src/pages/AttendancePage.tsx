@@ -101,7 +101,7 @@ export const AttendancePage: React.FC = () => {
   const fetchMyFixes = async () => {
     try {
       setLoading(true);
-      const res = await api.get('/attendance/fixes?view=mine');
+      const res = await api.get('/attendance/fixes?mine=true');
       setMyFixes(res.data);
     } catch (e) {
       console.error(e);
@@ -114,8 +114,9 @@ export const AttendancePage: React.FC = () => {
     if (!hasRole(['MANAGER', 'HR', 'ADMIN'])) return;
     try {
       setLoading(true);
-      const res = await api.get('/attendance/fixes?view=approvals');
-      setPendingFixes(res.data);
+      const res = await api.get('/attendance/fixes?status=PENDING');
+      const list = res.data.filter((f: any) => f.employee_id !== user?.employee_id);
+      setPendingFixes(list);
     } catch (e) {
       console.error(e);
     } finally {

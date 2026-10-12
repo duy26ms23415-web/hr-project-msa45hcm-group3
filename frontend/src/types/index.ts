@@ -89,6 +89,12 @@ export interface LeaveRequest {
     leave_name: string;
     is_paid: boolean;
   };
+  employee?: {
+    employee_id: number;
+    employee_code: string;
+    full_name: string;
+    email: string;
+  };
 }
 
 export interface PayrollPeriod {
