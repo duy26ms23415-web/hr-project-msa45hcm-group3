@@ -37,7 +37,7 @@ const { Title, Text } = Typography;
 export const AttendancePage: React.FC = () => {
   const { user, hasRole } = useAuth();
   const [activeTab, setActiveTab] = useState('records');
-  const isAdmin = hasRole(['ADMIN']);
+  const showEmployeeIdentity = hasRole(['ADMIN', 'HR', 'MANAGER']);
   const [employeesById, setEmployeesById] = useState<Record<number, Employee>>({});
   const [records, setRecords] = useState<AttendanceRecord[]>([]);
   const [myFixes, setMyFixes] = useState<AttendanceFix[]>([]);
@@ -76,16 +76,21 @@ export const AttendancePage: React.FC = () => {
   const fetchRecords = async () => {
     try {
       setLoading(true);
-      const [res, employeesRes] = await Promise.all([
+      const [res, employeesRes, ownProfileRes] = await Promise.all([
         api.get('/attendance/records'),
-        isAdmin ? api.get<Employee[]>('/employees') : Promise.resolve(null),
+        showEmployeeIdentity ? api.get<Employee[]>('/employees').catch(() => null) : Promise.resolve(null),
+        hasRole(['MANAGER']) && !hasRole(['ADMIN', 'HR']) && user?.employee_id != null
+          ? api.get<Employee>(`/employees/${user.employee_id}`).catch(() => null)
+          : Promise.resolve(null),
       ]);
       setRecords(res.data);
-      if (employeesRes) {
-        setEmployeesById(Object.fromEntries(
-          employeesRes.data.map((employee) => [employee.employee_id, employee])
-        ));
-      }
+      const profiles = [
+        ...(employeesRes?.data || []),
+        ...(ownProfileRes ? [ownProfileRes.data] : []),
+      ];
+      setEmployeesById(Object.fromEntries(
+        profiles.map((employee) => [employee.employee_id, employee])
+      ));
     } catch (e) {
       console.error(e);
     } finally {
@@ -122,7 +127,7 @@ export const AttendancePage: React.FC = () => {
     if (activeTab === 'records') fetchRecords();
     if (activeTab === 'my-fixes') fetchMyFixes();
     if (activeTab === 'approvals') fetchPendingFixes();
-  }, [activeTab, isAdmin]);
+  }, [activeTab, showEmployeeIdentity, user?.employee_id]);
 
   const handleCreateFix = async (values: any) => {
     setSubmitting(true);
@@ -236,7 +241,7 @@ export const AttendancePage: React.FC = () => {
                   rowKey="attendance_day_id"
                   loading={loading}
                   columns={[
-                    ...(isAdmin ? [
+                    ...(showEmployeeIdentity ? [
                       {
                         title: 'Họ và tên',
                         key: 'employee_full_name',

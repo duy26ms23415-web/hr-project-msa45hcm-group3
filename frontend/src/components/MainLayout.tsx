@@ -64,7 +64,7 @@ export const MainLayout: React.FC = () => {
           {
             key: '/employees',
             icon: <TeamOutlined />,
-            label: 'Nhân sự & QR Card',
+            label: hasRole(['ADMIN', 'HR']) ? 'Nhân sự & QR Card' : 'Nhân viên của tôi',
           },
         ]
       : []),
