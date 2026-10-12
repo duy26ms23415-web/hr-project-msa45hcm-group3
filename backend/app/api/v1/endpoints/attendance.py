@@ -246,7 +246,15 @@ async def create_attendance_fix(
     """Employee submits a fix request for missing check-in or check-out"""
     fix = await AttendanceService.create_fix_request(db, current_user.employee_id, fix_in)
     await db.commit()
-    await db.refresh(fix)
+    stmt = (
+        select(AttendanceFix)
+        .where(AttendanceFix.attendance_fix_id == fix.attendance_fix_id)
+        .options(
+            selectinload(AttendanceFix.employee),
+            selectinload(AttendanceFix.reviewer),
+        )
+    )
+    fix = (await db.execute(stmt)).scalar_one()
     return fix
 
 
@@ -264,7 +272,10 @@ async def list_attendance_fixes(
     require_known_role(role_set)
     stmt = (
         select(AttendanceFix)
-        .options(selectinload(AttendanceFix.employee))
+        .options(
+            selectinload(AttendanceFix.employee),
+            selectinload(AttendanceFix.reviewer),
+        )
         .order_by(AttendanceFix.created_at.desc())
     )
 
@@ -327,7 +338,15 @@ async def approve_attendance_fix(
         db, fix_id, current_user.employee_id, review_in, is_admin=is_admin
     )
     await db.commit()
-    await db.refresh(fix)
+    stmt = (
+        select(AttendanceFix)
+        .where(AttendanceFix.attendance_fix_id == fix.attendance_fix_id)
+        .options(
+            selectinload(AttendanceFix.employee),
+            selectinload(AttendanceFix.reviewer),
+        )
+    )
+    fix = (await db.execute(stmt)).scalar_one()
     return fix
 
 
@@ -347,6 +366,15 @@ async def reject_attendance_fix(
         db, fix_id, current_user.employee_id, review_in, is_admin=is_admin
     )
     await db.commit()
-    await db.refresh(fix)
+    stmt = (
+        select(AttendanceFix)
+        .where(AttendanceFix.attendance_fix_id == fix.attendance_fix_id)
+        .options(
+            selectinload(AttendanceFix.employee),
+            selectinload(AttendanceFix.reviewer),
+        )
+    )
+    fix = (await db.execute(stmt)).scalar_one()
     return fix
+
 

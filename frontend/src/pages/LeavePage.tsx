@@ -18,6 +18,7 @@ import {
   Space,
   Typography,
   Alert,
+  Badge,
 } from 'antd';
 import {
   CalendarOutlined,
@@ -40,7 +41,9 @@ export const LeavePage: React.FC = () => {
   const [balance, setBalance] = useState<LeaveBalance | null>(null);
   const [leaveTypes, setLeaveTypes] = useState<any[]>([]);
   const [myRequests, setMyRequests] = useState<LeaveRequest[]>([]);
-  const [pendingRequests, setPendingRequests] = useState<LeaveRequest[]>([]);
+  const [approvalRequests, setApprovalRequests] = useState<LeaveRequest[]>([]);
+  const [approvalFilter, setApprovalFilter] = useState<'PENDING' | 'APPROVED' | 'REJECTED' | 'ALL'>('PENDING');
+  const [pendingCount, setPendingCount] = useState<number>(0);
   const [activeTab, setActiveTab] = useState('my-requests');
   const [loading, setLoading] = useState(false);
 
@@ -98,13 +101,22 @@ export const LeavePage: React.FC = () => {
     }
   };
 
-  const fetchPendingRequests = async () => {
+  const fetchApprovalRequests = async (filter: 'PENDING' | 'APPROVED' | 'REJECTED' | 'ALL' = approvalFilter) => {
     if (!hasRole(['MANAGER', 'HR', 'ADMIN'])) return;
     try {
       setLoading(true);
-      const res = await api.get('/leaves/requests?status=PENDING');
+      const url = filter === 'ALL' ? '/leaves/requests' : `/leaves/requests?status=${filter}`;
+      const res = await api.get(url);
       const list = res.data.filter((r: LeaveRequest) => r.employee_id !== user?.employee_id);
-      setPendingRequests(list);
+      setApprovalRequests(list);
+
+      if (filter === 'PENDING') {
+        setPendingCount(list.length);
+      } else {
+        const pendingRes = await api.get('/leaves/requests?status=PENDING');
+        const pendingList = pendingRes.data.filter((r: LeaveRequest) => r.employee_id !== user?.employee_id);
+        setPendingCount(pendingList.length);
+      }
     } catch (e) {
       console.error(e);
     } finally {
@@ -114,15 +126,15 @@ export const LeavePage: React.FC = () => {
 
   useEffect(() => {
     fetchBalanceAndTypes();
-    if (hasRole(['MANAGER', 'ADMIN'])) {
-      fetchPendingRequests();
+    if (hasRole(['MANAGER', 'HR', 'ADMIN'])) {
+      fetchApprovalRequests(approvalFilter);
     }
   }, []);
 
   useEffect(() => {
     if (activeTab === 'my-requests') fetchMyRequests();
-    if (activeTab === 'approvals') fetchPendingRequests();
-  }, [activeTab]);
+    if (activeTab === 'approvals') fetchApprovalRequests(approvalFilter);
+  }, [activeTab, approvalFilter]);
 
   const handleCreateLeave = async (values: any) => {
     setSubmitting(true);
@@ -159,7 +171,9 @@ export const LeavePage: React.FC = () => {
       setReviewModalOpen(false);
       setReviewingReq(null);
       setReviewNote('');
-      fetchPendingRequests();
+      fetchApprovalRequests(approvalFilter);
+      fetchBalanceAndTypes();
+      fetchMyRequests();
     } catch (err: any) {
       message.error(err.response?.data?.detail || 'Lỗi khi phê duyệt!');
     }
@@ -303,12 +317,26 @@ export const LeavePage: React.FC = () => {
                       key: 'status',
                       render: (st) => (
                         <Tag color={st === 'APPROVED' ? 'success' : st === 'REJECTED' ? 'error' : 'warning'}>
-                          {st}
+                          {st === 'APPROVED' ? 'ĐÃ DUYỆT' : st === 'REJECTED' ? 'TỪ CHỐI' : 'CHỜ DUYỆT'}
                         </Tag>
                       ),
                     },
                     {
-                      title: 'Ghi chú duyệt',
+                      title: 'Người duyệt',
+                      key: 'reviewer',
+                      render: (_, req: LeaveRequest) => {
+                        if (req.status === 'PENDING') return <span style={{ color: '#9ca3af' }}>Chờ duyệt</span>;
+                        return req.reviewer?.full_name || (req.reviewer_employee_id ? `NV #${req.reviewer_employee_id}` : '-');
+                      },
+                    },
+                    {
+                      title: 'Thời gian duyệt',
+                      dataIndex: 'reviewed_at',
+                      key: 'reviewed_at',
+                      render: (d) => (d ? dayjs(d).format('DD/MM/YYYY HH:mm') : '-'),
+                    },
+                    {
+                      title: 'Ghi chú phản hồi',
                       dataIndex: 'review_note',
                       key: 'review_note',
                       render: (n) => n || '-',
@@ -323,107 +351,176 @@ export const LeavePage: React.FC = () => {
                     key: 'approvals',
                     label: (
                       <span>
-                        Duyệt đơn nghỉ phép
-                        {pendingRequests.length > 0 && (
+                        Duyệt đơn nghỉ & Remote
+                        {pendingCount > 0 && (
                           <Tag color="orange" style={{ marginLeft: 6, borderRadius: 10 }}>
-                            {pendingRequests.length}
+                            {pendingCount}
                           </Tag>
                         )}
                       </span>
                     ),
                     children: (
-                      <Table
-                        dataSource={pendingRequests}
-                        rowKey="leave_request_id"
-                        loading={loading}
-                        columns={[
-                          {
-                            title: 'Nhân viên',
-                            key: 'employee',
-                            render: (_, req: LeaveRequest) => (
-                              <div>
-                                <span style={{ fontWeight: 600 }}>{req.employee?.full_name || `Nhân viên #${req.employee_id}`}</span>
-                                <div style={{ fontSize: 12, color: '#64748b' }}>
-                                  <Tag color="geekblue" style={{ fontSize: 11, padding: '0 4px', marginRight: 4 }}>
-                                    {req.employee?.employee_code || `NV#${req.employee_id}`}
-                                  </Tag>
-                                  {req.employee?.email}
+                      <div>
+                        <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
+                          <Space>
+                            <Text strong>Bộ lọc trạng thái:</Text>
+                            <Radio.Group
+                              value={approvalFilter}
+                              onChange={(e) => {
+                                const newFilter = e.target.value;
+                                setApprovalFilter(newFilter);
+                                fetchApprovalRequests(newFilter);
+                              }}
+                              buttonStyle="solid"
+                            >
+                              <Radio.Button value="PENDING">
+                                Chờ duyệt {pendingCount > 0 && `(${pendingCount})`}
+                              </Radio.Button>
+                              <Radio.Button value="APPROVED">Đã duyệt (Lịch sử)</Radio.Button>
+                              <Radio.Button value="REJECTED">Đã từ chối</Radio.Button>
+                              <Radio.Button value="ALL">Tất cả</Radio.Button>
+                            </Radio.Group>
+                          </Space>
+                          <Text type="secondary" style={{ fontSize: 13 }}>
+                            {approvalFilter === 'PENDING'
+                              ? 'Danh sách đơn xin nghỉ phép / Remote cấp dưới cần duyệt'
+                              : 'Lịch sử xét duyệt đầy đủ để đối chiếu và tra cứu khi có khiếu nại'}
+                          </Text>
+                        </div>
+                        <Table
+                          dataSource={approvalRequests}
+                          rowKey="leave_request_id"
+                          loading={loading}
+                          columns={[
+                            {
+                              title: 'Nhân viên',
+                              key: 'employee',
+                              render: (_, req: LeaveRequest) => (
+                                <div>
+                                  <span style={{ fontWeight: 600 }}>{req.employee?.full_name || `Nhân viên #${req.employee_id}`}</span>
+                                  <div style={{ fontSize: 12, color: '#64748b' }}>
+                                    <Tag color="geekblue" style={{ fontSize: 11, padding: '0 4px', marginRight: 4 }}>
+                                      {req.employee?.employee_code || `NV#${req.employee_id}`}
+                                    </Tag>
+                                    {req.employee?.email}
+                                  </div>
                                 </div>
-                              </div>
-                            ),
-                          },
-                          {
-                            title: 'Ngày nghỉ',
-                            dataIndex: 'leave_date',
-                            key: 'leave_date',
-                            render: (d) => <b>{d}</b>,
-                          },
-                          {
-                            title: 'Buổi nghỉ',
-                            dataIndex: 'session',
-                            key: 'session',
-                            render: (s) => (
-                              <Tag color={s === 'FULL_DAY' ? 'blue' : 'cyan'}>
-                                {s === 'FULL_DAY' ? 'Cả ngày (1.0)' : s === 'MORNING' ? 'Sáng (0.5)' : 'Chiều (0.5)'}
-                              </Tag>
-                            ),
-                          },
-                          {
-                            title: 'Loại đơn',
-                            dataIndex: 'leave_type',
-                            key: 'leave_type',
-                            render: (lt) => {
-                              if (lt?.leave_code === 'REMOTE') {
-                                return <Tag color="cyan">Làm việc từ xa (Remote)</Tag>;
-                              }
-                              return lt?.leave_name || 'Phép năm';
+                              ),
                             },
-                          },
-                          {
-                            title: 'Lý do',
-                            dataIndex: 'reason',
-                            key: 'reason',
-                          },
-                          {
-                            title: 'Hành động',
-                            key: 'actions',
-                            render: (_, req) => (
-                              <Space size="small">
-                                <Button
-                                  type="primary"
-                                  size="small"
-                                  icon={<CheckOutlined />}
-                                  onClick={() => {
-                                    setReviewingReq(req);
-                                    setReviewAction('APPROVED');
-                                    setReviewNote('Đồng ý duyệt');
-                                    setReviewModalOpen(true);
-                                  }}
-                                  style={{ background: '#16a34a' }}
-                                >
-                                  Duyệt
-                                </Button>
-                                <Button
-                                  danger
-                                  size="small"
-                                  icon={<CloseOutlined />}
-                                  onClick={() => {
-                                    setReviewingReq(req);
-                                    setReviewAction('REJECTED');
-                                    setReviewNote('Từ chối nghỉ');
-                                    setReviewModalOpen(true);
-                                  }}
-                                >
-                                  Từ chối
-                                </Button>
-                              </Space>
-                            ),
-                          },
-                        ]}
-                      />
+                            {
+                              title: 'Ngày nghỉ / Remote',
+                              dataIndex: 'leave_date',
+                              key: 'leave_date',
+                              render: (d) => <b>{d}</b>,
+                            },
+                            {
+                              title: 'Buổi làm / Nghỉ',
+                              dataIndex: 'session',
+                              key: 'session',
+                              render: (s) => (
+                                <Tag color={s === 'FULL_DAY' ? 'blue' : 'cyan'}>
+                                  {s === 'FULL_DAY' ? 'Cả ngày (1.0)' : s === 'MORNING' ? 'Sáng (0.5)' : 'Chiều (0.5)'}
+                                </Tag>
+                              ),
+                            },
+                            {
+                              title: 'Loại đơn',
+                              dataIndex: 'leave_type',
+                              key: 'leave_type',
+                              render: (lt) => {
+                                if (lt?.leave_code === 'REMOTE') {
+                                  return <Tag color="cyan">Làm việc từ xa (Remote)</Tag>;
+                                }
+                                return lt?.leave_name || 'Phép năm';
+                              },
+                            },
+                            {
+                              title: 'Lý do',
+                              dataIndex: 'reason',
+                              key: 'reason',
+                            },
+                            {
+                              title: 'Trạng thái',
+                              dataIndex: 'status',
+                              key: 'status',
+                              render: (st) => (
+                                <Tag color={st === 'APPROVED' ? 'success' : st === 'REJECTED' ? 'error' : 'warning'}>
+                                  {st === 'APPROVED' ? 'ĐÃ DUYỆT' : st === 'REJECTED' ? 'TỪ CHỐI' : 'CHỜ DUYỆT'}
+                                </Tag>
+                              ),
+                            },
+                            {
+                              title: 'Thông tin duyệt',
+                              key: 'reviewer_info',
+                              render: (_, req: LeaveRequest) => {
+                                if (req.status === 'PENDING') {
+                                  return <span style={{ color: '#9ca3af' }}>Chưa duyệt</span>;
+                                }
+                                const reviewerName = req.reviewer?.full_name || (req.reviewer_employee_id ? `Quản lý #${req.reviewer_employee_id}` : 'Quản lý');
+                                return (
+                                  <div>
+                                    <div style={{ fontSize: 13, fontWeight: 500 }}>{reviewerName}</div>
+                                    {req.reviewed_at && (
+                                      <div style={{ fontSize: 12, color: '#6b7280' }}>
+                                        {dayjs(req.reviewed_at).format('DD/MM/YYYY HH:mm')}
+                                      </div>
+                                    )}
+                                    {req.review_note && (
+                                      <div style={{ fontSize: 12, color: '#4b5563', fontStyle: 'italic', marginTop: 2 }}>
+                                        "{req.review_note}"
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              },
+                            },
+                            {
+                              title: 'Hành động',
+                              key: 'actions',
+                              render: (_, req: LeaveRequest) => {
+                                if (req.status === 'PENDING') {
+                                  return (
+                                    <Space size="small">
+                                      <Button
+                                        type="primary"
+                                        size="small"
+                                        icon={<CheckOutlined />}
+                                        onClick={() => {
+                                          setReviewingReq(req);
+                                          setReviewAction('APPROVED');
+                                          setReviewNote('Đồng ý duyệt');
+                                          setReviewModalOpen(true);
+                                        }}
+                                        style={{ background: '#16a34a' }}
+                                      >
+                                        Duyệt
+                                      </Button>
+                                      <Button
+                                        danger
+                                        size="small"
+                                        icon={<CloseOutlined />}
+                                        onClick={() => {
+                                          setReviewingReq(req);
+                                          setReviewAction('REJECTED');
+                                          setReviewNote('Từ chối nghỉ');
+                                          setReviewModalOpen(true);
+                                        }}
+                                      >
+                                        Từ chối
+                                      </Button>
+                                    </Space>
+                                  );
+                                }
+                                return <Tag color="default">Đã xử lý</Tag>;
+                              },
+                            },
+                          ]}
+                        />
+                      </div>
                     ),
                   },
                 ]
+
               : []),
           ]}
         />

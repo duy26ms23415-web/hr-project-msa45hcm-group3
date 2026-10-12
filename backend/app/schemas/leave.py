@@ -42,9 +42,9 @@ class LeaveEmployeeBriefResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     employee_id: int
-    employee_code: str
+    employee_code: Optional[str] = None
     full_name: str
-    email: str
+    email: Optional[str] = None
 
 
 class LeaveRequestResponse(BaseModel):
@@ -64,4 +64,5 @@ class LeaveRequestResponse(BaseModel):
     created_at: datetime
     leave_type: Optional[LeaveTypeResponse] = None
     employee: Optional[LeaveEmployeeBriefResponse] = None
+    reviewer: Optional[LeaveEmployeeBriefResponse] = None
 

@@ -201,7 +201,7 @@ async def update_employee(
     # Preserve the original demo login email even if only capitalization changed.
     if is_demo and "email" in update_data:
         update_data.pop("email")
-    employee_role = None
+    employee_role: Optional[Role] = None
     if emp_update.new_password is not None and not account:
         login_email = str(update_data.get("email", emp.email))
         existing_login = (await db.execute(
@@ -280,7 +280,7 @@ async def update_employee(
                 account.is_active = update_data["employment_status"] == "ACTIVE"
             if emp_update.new_password is not None:
                 account.password_hash = get_password_hash(emp_update.new_password)
-        elif emp_update.new_password is not None:
+        elif emp_update.new_password is not None and employee_role is not None:
             account = UserAccount(
                 employee_id=emp.employee_id,
                 login_email=str(emp.email),

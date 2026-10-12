@@ -95,7 +95,8 @@ async def submit_leave_request(
         .where(LeaveRequest.leave_request_id == leave_req.leave_request_id)
         .options(
             selectinload(LeaveRequest.leave_type),
-            selectinload(LeaveRequest.employee)
+            selectinload(LeaveRequest.employee),
+            selectinload(LeaveRequest.reviewer)
         )
     )
     reloaded = (await db.execute(stmt)).scalar_one()
@@ -119,7 +120,8 @@ async def list_leave_requests(
         select(LeaveRequest)
         .options(
             selectinload(LeaveRequest.leave_type),
-            selectinload(LeaveRequest.employee)
+            selectinload(LeaveRequest.employee),
+            selectinload(LeaveRequest.reviewer)
         )
         .order_by(LeaveRequest.created_at.desc())
     )
@@ -201,7 +203,8 @@ async def review_leave_request(
         .where(LeaveRequest.leave_request_id == req.leave_request_id)
         .options(
             selectinload(LeaveRequest.leave_type),
-            selectinload(LeaveRequest.employee)
+            selectinload(LeaveRequest.employee),
+            selectinload(LeaveRequest.reviewer)
         )
     )
     return (await db.execute(stmt)).scalar_one()
@@ -230,7 +233,8 @@ async def approve_leave_request(
         .where(LeaveRequest.leave_request_id == req.leave_request_id)
         .options(
             selectinload(LeaveRequest.leave_type),
-            selectinload(LeaveRequest.employee)
+            selectinload(LeaveRequest.employee),
+            selectinload(LeaveRequest.reviewer)
         )
     )
     return (await db.execute(stmt)).scalar_one()
@@ -259,7 +263,8 @@ async def reject_leave_request(
         .where(LeaveRequest.leave_request_id == req.leave_request_id)
         .options(
             selectinload(LeaveRequest.leave_type),
-            selectinload(LeaveRequest.employee)
+            selectinload(LeaveRequest.employee),
+            selectinload(LeaveRequest.reviewer)
         )
     )
     return (await db.execute(stmt)).scalar_one()

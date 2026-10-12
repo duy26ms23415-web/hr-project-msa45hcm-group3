@@ -59,6 +59,18 @@ export interface AttendanceFix {
   reviewed_at?: string;
   review_note?: string;
   created_at: string;
+  employee?: {
+    employee_id: number;
+    employee_code?: string;
+    full_name: string;
+    email?: string;
+  };
+  reviewer?: {
+    employee_id: number;
+    employee_code?: string;
+    full_name: string;
+    email?: string;
+  };
 }
 
 export interface LeaveBalance {
@@ -94,6 +106,12 @@ export interface LeaveRequest {
     employee_code: string;
     full_name: string;
     email: string;
+  };
+  reviewer?: {
+    employee_id: number;
+    employee_code?: string;
+    full_name: string;
+    email?: string;
   };
 }
 
