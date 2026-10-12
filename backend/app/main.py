@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.api.v1.api import api_router
+from app.core.ai_errors import install_ai_errors
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -9,6 +10,7 @@ app = FastAPI(
     docs_url=f"{settings.API_V1_PREFIX}/docs",
     redoc_url=f"{settings.API_V1_PREFIX}/redoc",
 )
+install_ai_errors(app, (f"{settings.API_V1_PREFIX}/ai", f"{settings.API_V1_PREFIX}/reports"))
 
 # Set up CORS
 if settings.CORS_ORIGINS:

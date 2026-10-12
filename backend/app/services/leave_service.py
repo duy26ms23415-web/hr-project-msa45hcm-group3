@@ -76,8 +76,8 @@ class LeaveService:
                     detail=f"An active leave request already exists for {req_in.leave_date} ({r.session})"
                 )
 
-        # Check quota if it's paid annual leave
-        if l_type.is_paid:
+        # Check quota if it's paid annual leave (REMOTE and other paid types do not consume annual leave quota)
+        if l_type.leave_code == "ANNUAL":
             year = req_in.leave_date.year
             balance = await LeaveService.get_or_create_balance(db, employee_id, year)
             if balance.remaining_days < leave_days:
@@ -107,15 +107,16 @@ class LeaveService:
         db: AsyncSession,
         leave_request_id: int,
         reviewer_employee_id: int,
-        review_in: LeaveRequestReview,
-        is_admin: bool = False
+        review_in: LeaveRequestReview
     ) -> LeaveRequest:
         """Manager approves or rejects leave request and updates leave balance if approved"""
         stmt = (
             select(LeaveRequest)
             .where(LeaveRequest.leave_request_id == leave_request_id)
+            # Serialize reviews before reading status; refresh any cached ORM instance.
+            .with_for_update()
+            .execution_options(populate_existing=True)
             .options(
-                selectinload(LeaveRequest.employee),
                 selectinload(LeaveRequest.leave_type)
             )
         )
@@ -125,8 +126,13 @@ class LeaveService:
         if req.status != "PENDING":
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Request is already {req.status}")
 
-        # Manager authority check
-        if not is_admin and req.employee.manager_employee_id != reviewer_employee_id:
+        # Lock the employee row so reassignment cannot race the authorization check and commit.
+        employee = (await db.execute(
+            select(Employee).where(Employee.employee_id == req.employee_id).with_for_update()
+        )).scalar_one_or_none()
+        if not employee:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Employee not found")
+        if req.employee_id == reviewer_employee_id or employee.manager_employee_id != reviewer_employee_id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Only the direct manager can approve or reject this leave request"
@@ -139,15 +145,18 @@ class LeaveService:
         req.review_note = review_in.review_note
 
         if review_in.status == "APPROVED":
-            # If paid leave, deduct balance
-            if req.leave_type.is_paid:
+            # If annual leave, deduct balance (Remote does not consume annual leave quota)
+            if req.leave_type.leave_code == "ANNUAL":
                 year = req.leave_date.year
                 balance = await LeaveService.get_or_create_balance(db, req.employee_id, year)
                 balance.used_days += req.leave_days
                 balance.remaining_days = max(Decimal("0.00"), balance.total_entitled_days - balance.used_days)
                 balance.updated_at = now_utc
 
-            # Update day attendance
+            # Update day attendance: REMOTE status if remote, otherwise ON_LEAVE
+            att_status = "REMOTE" if req.leave_type.leave_code == "REMOTE" else "ON_LEAVE"
+            worked_mins = int(req.leave_days * 480) if req.leave_type.is_paid else 0
+
             stmt_day = select(AttendanceDay).where(
                 and_(
                     AttendanceDay.employee_id == req.employee_id,
@@ -159,12 +168,14 @@ class LeaveService:
                 day_rec = AttendanceDay(
                     employee_id=req.employee_id,
                     work_date=req.leave_date,
-                    worked_minutes=int(req.leave_days * 480) if req.leave_type.is_paid else 0,
-                    attendance_status="ON_LEAVE"
+                    worked_minutes=worked_mins,
+                    attendance_status=att_status
                 )
                 db.add(day_rec)
             else:
-                day_rec.attendance_status = "ON_LEAVE"
+                day_rec.attendance_status = att_status
+                if req.leave_type.is_paid:
+                    day_rec.worked_minutes = max(day_rec.worked_minutes or 0, worked_mins)
 
         await db.flush()
         return req

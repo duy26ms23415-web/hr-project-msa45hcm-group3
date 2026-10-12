@@ -31,6 +31,7 @@ import dayjs from 'dayjs';
 import { useAuth } from '../context/AuthContext';
 import api from '../api/client';
 import type { LeaveBalance, LeaveRequest } from '../types';
+import { useLocation, useNavigate } from 'react-router-dom';
 
 const { Title, Text } = Typography;
 
@@ -47,6 +48,24 @@ export const LeavePage: React.FC = () => {
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [form] = Form.useForm();
   const [submitting, setSubmitting] = useState(false);
+  const location = useLocation();
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    const draft = location.state?.aiDraft;
+    if (!draft) return;
+    form.resetFields();
+    form.setFieldsValue({ ...draft, leave_date: dayjs(draft.leave_date) });
+    setCreateModalOpen(true);
+    navigate(location.pathname, { replace: true, state: null });
+  }, [location.state, location.pathname, form, navigate]);
+
+  useEffect(() => {
+    if (location.state?.aiTab === 'approvals') {
+      setActiveTab('approvals');
+      navigate(location.pathname, { replace: true, state: null });
+    }
+  }, [location.state, location.pathname, navigate]);
 
   // Review modal
   const [reviewingReq, setReviewingReq] = useState<LeaveRequest | null>(null);
@@ -70,7 +89,7 @@ export const LeavePage: React.FC = () => {
   const fetchMyRequests = async () => {
     try {
       setLoading(true);
-      const res = await api.get('/leaves/requests');
+      const res = await api.get('/leaves/requests?view=mine');
       setMyRequests(res.data);
     } catch (e) {
       console.error(e);
@@ -80,10 +99,10 @@ export const LeavePage: React.FC = () => {
   };
 
   const fetchPendingRequests = async () => {
-    if (!hasRole(['MANAGER', 'ADMIN'])) return;
+    if (!hasRole(['MANAGER', 'HR', 'ADMIN'])) return;
     try {
       setLoading(true);
-      const res = await api.get('/leaves/requests?status=PENDING');
+      const res = await api.get('/leaves/requests?view=approvals');
       setPendingRequests(res.data);
     } catch (e) {
       console.error(e);
@@ -147,9 +166,9 @@ export const LeavePage: React.FC = () => {
       {/* Header bar */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
         <div>
-          <Title level={4} style={{ margin: 0 }}>Quản lý Nghỉ phép</Title>
+          <Title level={4} style={{ margin: 0 }}>Quản lý Nghỉ phép & Làm việc từ xa (Remote)</Title>
           <Text type="secondary" style={{ fontSize: 13 }}>
-            Quản lý trực tiếp duyệt • Phép năm tự hết hạn vào 31/12 (Không bảo lưu)
+            Quản lý trực tiếp duyệt • Phép năm hết hạn 31/12 • Đơn Remote hưởng 100% lương (Không trừ phép năm)
           </Text>
         </div>
 
@@ -167,7 +186,7 @@ export const LeavePage: React.FC = () => {
           }}
           style={{ borderRadius: 8, background: '#1677ff' }}
         >
-          Tạo đơn xin nghỉ phép
+          Tạo đơn xin nghỉ / Remote
         </Button>
       </div>
 
@@ -210,7 +229,7 @@ export const LeavePage: React.FC = () => {
               valueStyle={{ fontWeight: 700, color: '#16a34a' }}
             />
             <div style={{ marginTop: 8, fontSize: 12, color: '#64748b' }}>
-              Hết hạn tự động 31/12 (Hết phép buộc nghỉ không lương)
+              Hết hạn 31/12 (Đơn Remote hưởng lương, không trừ phép năm)
             </div>
           </Card>
         </Col>
@@ -224,7 +243,7 @@ export const LeavePage: React.FC = () => {
           items={[
             {
               key: 'my-requests',
-              label: 'Đơn nghỉ phép của tôi',
+              label: 'Đơn nghỉ phép & Remote của tôi',
               children: (
                 <Table
                   dataSource={myRequests}
@@ -232,13 +251,13 @@ export const LeavePage: React.FC = () => {
                   loading={loading}
                   columns={[
                     {
-                      title: 'Ngày nghỉ',
+                      title: 'Ngày nghỉ / Remote',
                       dataIndex: 'leave_date',
                       key: 'leave_date',
                       render: (d) => <b>{d}</b>,
                     },
                     {
-                      title: 'Buổi nghỉ',
+                      title: 'Buổi làm việc / Nghỉ',
                       dataIndex: 'session',
                       key: 'session',
                       render: (s) => {
@@ -255,10 +274,15 @@ export const LeavePage: React.FC = () => {
                       },
                     },
                     {
-                      title: 'Loại phép',
+                      title: 'Loại đơn',
                       dataIndex: 'leave_type',
                       key: 'leave_type',
-                      render: (lt) => lt?.leave_name || 'Phép năm',
+                      render: (lt) => {
+                        if (lt?.leave_code === 'REMOTE') {
+                          return <Tag color="cyan">Làm việc từ xa (Remote)</Tag>;
+                        }
+                        return lt?.leave_name || 'Phép năm';
+                      },
                     },
                     {
                       title: 'Lý do',
@@ -286,7 +310,7 @@ export const LeavePage: React.FC = () => {
                 />
               ),
             },
-            ...(hasRole(['MANAGER', 'ADMIN'])
+            ...(hasRole(['MANAGER', 'HR', 'ADMIN'])
               ? [
                   {
                     key: 'approvals',
@@ -329,10 +353,15 @@ export const LeavePage: React.FC = () => {
                             ),
                           },
                           {
-                            title: 'Loại nghỉ',
+                            title: 'Loại đơn',
                             dataIndex: 'leave_type',
                             key: 'leave_type',
-                            render: (lt) => lt?.leave_name || 'Phép năm',
+                            render: (lt) => {
+                              if (lt?.leave_code === 'REMOTE') {
+                                return <Tag color="cyan">Làm việc từ xa (Remote)</Tag>;
+                              }
+                              return lt?.leave_name || 'Phép năm';
+                            },
                           },
                           {
                             title: 'Lý do',
@@ -388,20 +417,21 @@ export const LeavePage: React.FC = () => {
       <Modal
         open={createModalOpen}
         onCancel={() => setCreateModalOpen(false)}
-        title="Lập đơn xin nghỉ phép"
+        title="Lập đơn xin nghỉ phép / Làm việc từ xa (Remote)"
+        forceRender
         footer={null}
-        width={520}
+        width={540}
       >
         <Form form={form} layout="vertical" onFinish={handleCreateLeave}>
           <Form.Item
             name="leave_type_id"
-            label="Loại nghỉ phép"
-            rules={[{ required: true, message: 'Vui lòng chọn loại nghỉ phép!' }]}
+            label="Loại đơn"
+            rules={[{ required: true, message: 'Vui lòng chọn loại đơn!' }]}
           >
             <Select>
               {leaveTypes.map((lt) => (
                 <Select.Option key={lt.leave_type_id} value={lt.leave_type_id}>
-                  {lt.leave_name} {lt.is_paid ? '(Hưởng lương)' : '(Không hưởng lương)'}
+                  {lt.leave_name} {lt.leave_code === 'REMOTE' ? '(Hưởng 100% lương • Không trừ phép năm)' : lt.is_paid ? '(Hưởng lương)' : '(Không hưởng lương)'}
                 </Select.Option>
               ))}
             </Select>

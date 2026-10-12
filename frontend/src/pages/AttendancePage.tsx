@@ -30,6 +30,7 @@ import dayjs from 'dayjs';
 import { useAuth } from '../context/AuthContext';
 import api from '../api/client';
 import type { AttendanceRecord, AttendanceFix, Employee } from '../types';
+import { useLocation, useNavigate } from 'react-router-dom';
 
 const { Title, Text } = Typography;
 
@@ -47,6 +48,24 @@ export const AttendancePage: React.FC = () => {
   const [fixModalOpen, setFixModalOpen] = useState(false);
   const [form] = Form.useForm();
   const [submitting, setSubmitting] = useState(false);
+  const location = useLocation();
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    const draft = location.state?.aiDraft;
+    if (!draft) return;
+    form.resetFields();
+    form.setFieldsValue({ ...draft, work_date: dayjs(draft.work_date), requested_time: draft.requested_time ? dayjs(`${draft.work_date}T${draft.requested_time}`) : undefined });
+    setFixModalOpen(true);
+    navigate(location.pathname, { replace: true, state: null });
+  }, [location.state, location.pathname, form, navigate]);
+
+  useEffect(() => {
+    if (location.state?.aiTab === 'approvals') {
+      setActiveTab('approvals');
+      navigate(location.pathname, { replace: true, state: null });
+    }
+  }, [location.state, location.pathname, navigate]);
 
   // Review modal
   const [reviewingFix, setReviewingFix] = useState<AttendanceFix | null>(null);
@@ -82,7 +101,7 @@ export const AttendancePage: React.FC = () => {
   const fetchMyFixes = async () => {
     try {
       setLoading(true);
-      const res = await api.get('/attendance/fixes');
+      const res = await api.get('/attendance/fixes?view=mine');
       setMyFixes(res.data);
     } catch (e) {
       console.error(e);
@@ -92,10 +111,10 @@ export const AttendancePage: React.FC = () => {
   };
 
   const fetchPendingFixes = async () => {
-    if (!hasRole(['MANAGER', 'ADMIN'])) return;
+    if (!hasRole(['MANAGER', 'HR', 'ADMIN'])) return;
     try {
       setLoading(true);
-      const res = await api.get('/attendance/fixes?status=PENDING');
+      const res = await api.get('/attendance/fixes?view=approvals');
       setPendingFixes(res.data);
     } catch (e) {
       console.error(e);
@@ -115,7 +134,7 @@ export const AttendancePage: React.FC = () => {
     try {
       const workDateStr = values.work_date.format('YYYY-MM-DD');
       const timeStr = values.requested_time.format('HH:mm:ss');
-      const requestedAt = `${workDateStr}T${timeStr}`;
+      const requestedAt = `${workDateStr}T${timeStr}+07:00`;
 
       await api.post('/attendance/fixes', {
         work_date: workDateStr,
@@ -139,7 +158,7 @@ export const AttendancePage: React.FC = () => {
   const handleReviewSubmit = async () => {
     if (!reviewingFix) return;
     try {
-      await api.post(`/attendance/fixes/${reviewingFix.attendance_fix_id}/review`, {
+      await api.post(`/attendance/fixes/${reviewingFix.attendance_fix_id}/${reviewAction === 'APPROVED' ? 'approve' : 'reject'}`, {
         status: reviewAction,
         review_note: reviewNote,
       });
@@ -246,13 +265,23 @@ export const AttendancePage: React.FC = () => {
                       title: 'Giờ vào (Check-in)',
                       dataIndex: 'first_check_in_at',
                       key: 'first_check_in_at',
-                      render: (t) => (t ? dayjs(t).format('HH:mm:ss') : <span style={{ color: '#ef4444' }}>Chưa quẹt</span>),
+                      render: (t, record: AttendanceRecord) => {
+                        if (record.attendance_status === 'REMOTE') {
+                          return <span style={{ color: '#0284c7' }}>Làm việc từ xa</span>;
+                        }
+                        return t ? dayjs(t).format('HH:mm:ss') : <span style={{ color: '#ef4444' }}>Chưa quẹt</span>;
+                      },
                     },
                     {
                       title: 'Giờ ra (Check-out)',
                       dataIndex: 'last_check_out_at',
                       key: 'last_check_out_at',
-                      render: (t) => (t ? dayjs(t).format('HH:mm:ss') : <span style={{ color: '#ef4444' }}>Chưa quẹt</span>),
+                      render: (t, record: AttendanceRecord) => {
+                        if (record.attendance_status === 'REMOTE') {
+                          return <span style={{ color: '#0284c7' }}>Làm việc từ xa</span>;
+                        }
+                        return t ? dayjs(t).format('HH:mm:ss') : <span style={{ color: '#ef4444' }}>Chưa quẹt</span>;
+                      },
                     },
                     {
                       title: 'Tổng giờ làm',
@@ -267,6 +296,7 @@ export const AttendancePage: React.FC = () => {
                       render: (status) => {
                         let color = 'default';
                         if (status === 'PRESENT') color = 'success';
+                        else if (status === 'REMOTE') return <Tag color="cyan">Làm việc từ xa (REMOTE)</Tag>;
                         else if (status === 'INCOMPLETE') color = 'warning';
                         else if (status === 'ON_LEAVE') color = 'processing';
                         else if (status === 'HOLIDAY') color = 'purple';
@@ -344,7 +374,7 @@ export const AttendancePage: React.FC = () => {
                 />
               ),
             },
-            ...(hasRole(['MANAGER', 'ADMIN'])
+            ...(hasRole(['MANAGER', 'HR', 'ADMIN'])
               ? [
                   {
                     key: 'approvals',
@@ -443,6 +473,7 @@ export const AttendancePage: React.FC = () => {
         open={fixModalOpen}
         onCancel={() => setFixModalOpen(false)}
         title="Lập đơn giải trình bổ sung chấm công"
+        forceRender
         footer={null}
         width={520}
       >
