@@ -18,6 +18,7 @@ import {
   Space,
   Typography,
   Alert,
+  Badge,
 } from 'antd';
 import {
   CalendarOutlined,
@@ -31,6 +32,7 @@ import dayjs from 'dayjs';
 import { useAuth } from '../context/AuthContext';
 import api from '../api/client';
 import type { LeaveBalance, LeaveRequest } from '../types';
+import { useLocation, useNavigate } from 'react-router-dom';
 
 const { Title, Text } = Typography;
 
@@ -39,7 +41,9 @@ export const LeavePage: React.FC = () => {
   const [balance, setBalance] = useState<LeaveBalance | null>(null);
   const [leaveTypes, setLeaveTypes] = useState<any[]>([]);
   const [myRequests, setMyRequests] = useState<LeaveRequest[]>([]);
-  const [pendingRequests, setPendingRequests] = useState<LeaveRequest[]>([]);
+  const [approvalRequests, setApprovalRequests] = useState<LeaveRequest[]>([]);
+  const [approvalFilter, setApprovalFilter] = useState<'PENDING' | 'APPROVED' | 'REJECTED' | 'ALL'>('PENDING');
+  const [pendingCount, setPendingCount] = useState<number>(0);
   const [activeTab, setActiveTab] = useState('my-requests');
   const [loading, setLoading] = useState(false);
 
@@ -47,6 +51,24 @@ export const LeavePage: React.FC = () => {
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [form] = Form.useForm();
   const [submitting, setSubmitting] = useState(false);
+  const location = useLocation();
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    const draft = location.state?.aiDraft;
+    if (!draft) return;
+    form.resetFields();
+    form.setFieldsValue({ ...draft, leave_date: dayjs(draft.leave_date) });
+    setCreateModalOpen(true);
+    navigate(location.pathname, { replace: true, state: null });
+  }, [location.state, location.pathname, form, navigate]);
+
+  useEffect(() => {
+    if (location.state?.aiTab === 'approvals') {
+      setActiveTab('approvals');
+      navigate(location.pathname, { replace: true, state: null });
+    }
+  }, [location.state, location.pathname, navigate]);
 
   // Review modal
   const [reviewingReq, setReviewingReq] = useState<LeaveRequest | null>(null);
@@ -70,7 +92,7 @@ export const LeavePage: React.FC = () => {
   const fetchMyRequests = async () => {
     try {
       setLoading(true);
-      const res = await api.get('/leaves/requests');
+      const res = await api.get('/leaves/requests?mine=true');
       setMyRequests(res.data);
     } catch (e) {
       console.error(e);
@@ -79,12 +101,22 @@ export const LeavePage: React.FC = () => {
     }
   };
 
-  const fetchPendingRequests = async () => {
-    if (!hasRole(['MANAGER', 'ADMIN'])) return;
+  const fetchApprovalRequests = async (filter: 'PENDING' | 'APPROVED' | 'REJECTED' | 'ALL' = approvalFilter) => {
+    if (!hasRole(['MANAGER', 'HR', 'ADMIN'])) return;
     try {
       setLoading(true);
-      const res = await api.get('/leaves/requests?status=PENDING');
-      setPendingRequests(res.data);
+      const url = filter === 'ALL' ? '/leaves/requests' : `/leaves/requests?status=${filter}`;
+      const res = await api.get(url);
+      const list = res.data.filter((r: LeaveRequest) => r.employee_id !== user?.employee_id);
+      setApprovalRequests(list);
+
+      if (filter === 'PENDING') {
+        setPendingCount(list.length);
+      } else {
+        const pendingRes = await api.get('/leaves/requests?status=PENDING');
+        const pendingList = pendingRes.data.filter((r: LeaveRequest) => r.employee_id !== user?.employee_id);
+        setPendingCount(pendingList.length);
+      }
     } catch (e) {
       console.error(e);
     } finally {
@@ -94,12 +126,15 @@ export const LeavePage: React.FC = () => {
 
   useEffect(() => {
     fetchBalanceAndTypes();
+    if (hasRole(['MANAGER', 'HR', 'ADMIN'])) {
+      fetchApprovalRequests(approvalFilter);
+    }
   }, []);
 
   useEffect(() => {
     if (activeTab === 'my-requests') fetchMyRequests();
-    if (activeTab === 'approvals') fetchPendingRequests();
-  }, [activeTab]);
+    if (activeTab === 'approvals') fetchApprovalRequests(approvalFilter);
+  }, [activeTab, approvalFilter]);
 
   const handleCreateLeave = async (values: any) => {
     setSubmitting(true);
@@ -136,7 +171,9 @@ export const LeavePage: React.FC = () => {
       setReviewModalOpen(false);
       setReviewingReq(null);
       setReviewNote('');
-      fetchPendingRequests();
+      fetchApprovalRequests(approvalFilter);
+      fetchBalanceAndTypes();
+      fetchMyRequests();
     } catch (err: any) {
       message.error(err.response?.data?.detail || 'Lỗi khi phê duyệt!');
     }
@@ -147,9 +184,9 @@ export const LeavePage: React.FC = () => {
       {/* Header bar */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
         <div>
-          <Title level={4} style={{ margin: 0 }}>Quản lý Nghỉ phép</Title>
+          <Title level={4} style={{ margin: 0 }}>Quản lý Nghỉ phép & Làm việc từ xa (Remote)</Title>
           <Text type="secondary" style={{ fontSize: 13 }}>
-            Quản lý trực tiếp duyệt • Phép năm tự hết hạn vào 31/12 (Không bảo lưu)
+            Quản lý trực tiếp duyệt • Phép năm hết hạn 31/12 • Đơn Remote hưởng 100% lương (Không trừ phép năm)
           </Text>
         </div>
 
@@ -157,6 +194,9 @@ export const LeavePage: React.FC = () => {
           type="primary"
           icon={<PlusOutlined />}
           onClick={() => {
+            if (leaveTypes.length === 0) {
+              fetchBalanceAndTypes();
+            }
             form.resetFields();
             form.setFieldsValue({
               leave_date: dayjs().add(1, 'day'),
@@ -167,7 +207,7 @@ export const LeavePage: React.FC = () => {
           }}
           style={{ borderRadius: 8, background: '#1677ff' }}
         >
-          Tạo đơn xin nghỉ phép
+          Tạo đơn xin nghỉ / Remote
         </Button>
       </div>
 
@@ -210,7 +250,7 @@ export const LeavePage: React.FC = () => {
               valueStyle={{ fontWeight: 700, color: '#16a34a' }}
             />
             <div style={{ marginTop: 8, fontSize: 12, color: '#64748b' }}>
-              Hết hạn tự động 31/12 (Hết phép buộc nghỉ không lương)
+              Hết hạn 31/12 (Đơn Remote hưởng lương, không trừ phép năm)
             </div>
           </Card>
         </Col>
@@ -224,7 +264,7 @@ export const LeavePage: React.FC = () => {
           items={[
             {
               key: 'my-requests',
-              label: 'Đơn nghỉ phép của tôi',
+              label: 'Đơn nghỉ phép & Remote của tôi',
               children: (
                 <Table
                   dataSource={myRequests}
@@ -232,13 +272,13 @@ export const LeavePage: React.FC = () => {
                   loading={loading}
                   columns={[
                     {
-                      title: 'Ngày nghỉ',
+                      title: 'Ngày nghỉ / Remote',
                       dataIndex: 'leave_date',
                       key: 'leave_date',
                       render: (d) => <b>{d}</b>,
                     },
                     {
-                      title: 'Buổi nghỉ',
+                      title: 'Buổi làm việc / Nghỉ',
                       dataIndex: 'session',
                       key: 'session',
                       render: (s) => {
@@ -255,10 +295,15 @@ export const LeavePage: React.FC = () => {
                       },
                     },
                     {
-                      title: 'Loại phép',
+                      title: 'Loại đơn',
                       dataIndex: 'leave_type',
                       key: 'leave_type',
-                      render: (lt) => lt?.leave_name || 'Phép năm',
+                      render: (lt) => {
+                        if (lt?.leave_code === 'REMOTE') {
+                          return <Tag color="cyan">Làm việc từ xa (Remote)</Tag>;
+                        }
+                        return lt?.leave_name || 'Phép năm';
+                      },
                     },
                     {
                       title: 'Lý do',
@@ -272,12 +317,26 @@ export const LeavePage: React.FC = () => {
                       key: 'status',
                       render: (st) => (
                         <Tag color={st === 'APPROVED' ? 'success' : st === 'REJECTED' ? 'error' : 'warning'}>
-                          {st}
+                          {st === 'APPROVED' ? 'ĐÃ DUYỆT' : st === 'REJECTED' ? 'TỪ CHỐI' : 'CHỜ DUYỆT'}
                         </Tag>
                       ),
                     },
                     {
-                      title: 'Ghi chú duyệt',
+                      title: 'Người duyệt',
+                      key: 'reviewer',
+                      render: (_, req: LeaveRequest) => {
+                        if (req.status === 'PENDING') return <span style={{ color: '#9ca3af' }}>Chờ duyệt</span>;
+                        return req.reviewer?.full_name || (req.reviewer_employee_id ? `NV #${req.reviewer_employee_id}` : '-');
+                      },
+                    },
+                    {
+                      title: 'Thời gian duyệt',
+                      dataIndex: 'reviewed_at',
+                      key: 'reviewed_at',
+                      render: (d) => (d ? dayjs(d).format('DD/MM/YYYY HH:mm') : '-'),
+                    },
+                    {
+                      title: 'Ghi chú phản hồi',
                       dataIndex: 'review_note',
                       key: 'review_note',
                       render: (n) => n || '-',
@@ -286,99 +345,182 @@ export const LeavePage: React.FC = () => {
                 />
               ),
             },
-            ...(hasRole(['MANAGER', 'ADMIN'])
+            ...(hasRole(['MANAGER', 'HR', 'ADMIN'])
               ? [
                   {
                     key: 'approvals',
                     label: (
                       <span>
-                        Duyệt đơn nghỉ phép
-                        {pendingRequests.length > 0 && (
+                        Duyệt đơn nghỉ & Remote
+                        {pendingCount > 0 && (
                           <Tag color="orange" style={{ marginLeft: 6, borderRadius: 10 }}>
-                            {pendingRequests.length}
+                            {pendingCount}
                           </Tag>
                         )}
                       </span>
                     ),
                     children: (
-                      <Table
-                        dataSource={pendingRequests}
-                        rowKey="leave_request_id"
-                        loading={loading}
-                        columns={[
-                          {
-                            title: 'Mã NV',
-                            dataIndex: 'employee_id',
-                            key: 'employee_id',
-                            render: (id) => <Tag color="geekblue">NV#{id}</Tag>,
-                          },
-                          {
-                            title: 'Ngày nghỉ',
-                            dataIndex: 'leave_date',
-                            key: 'leave_date',
-                            render: (d) => <b>{d}</b>,
-                          },
-                          {
-                            title: 'Buổi nghỉ',
-                            dataIndex: 'session',
-                            key: 'session',
-                            render: (s) => (
-                              <Tag color={s === 'FULL_DAY' ? 'blue' : 'cyan'}>
-                                {s === 'FULL_DAY' ? 'Cả ngày (1.0)' : s === 'MORNING' ? 'Sáng (0.5)' : 'Chiều (0.5)'}
-                              </Tag>
-                            ),
-                          },
-                          {
-                            title: 'Loại nghỉ',
-                            dataIndex: 'leave_type',
-                            key: 'leave_type',
-                            render: (lt) => lt?.leave_name || 'Phép năm',
-                          },
-                          {
-                            title: 'Lý do',
-                            dataIndex: 'reason',
-                            key: 'reason',
-                          },
-                          {
-                            title: 'Hành động',
-                            key: 'actions',
-                            render: (_, req) => (
-                              <Space size="small">
-                                <Button
-                                  type="primary"
-                                  size="small"
-                                  icon={<CheckOutlined />}
-                                  onClick={() => {
-                                    setReviewingReq(req);
-                                    setReviewAction('APPROVED');
-                                    setReviewNote('Đồng ý duyệt');
-                                    setReviewModalOpen(true);
-                                  }}
-                                  style={{ background: '#16a34a' }}
-                                >
-                                  Duyệt
-                                </Button>
-                                <Button
-                                  danger
-                                  size="small"
-                                  icon={<CloseOutlined />}
-                                  onClick={() => {
-                                    setReviewingReq(req);
-                                    setReviewAction('REJECTED');
-                                    setReviewNote('Từ chối nghỉ');
-                                    setReviewModalOpen(true);
-                                  }}
-                                >
-                                  Từ chối
-                                </Button>
-                              </Space>
-                            ),
-                          },
-                        ]}
-                      />
+                      <div>
+                        <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
+                          <Space>
+                            <Text strong>Bộ lọc trạng thái:</Text>
+                            <Radio.Group
+                              value={approvalFilter}
+                              onChange={(e) => {
+                                const newFilter = e.target.value;
+                                setApprovalFilter(newFilter);
+                                fetchApprovalRequests(newFilter);
+                              }}
+                              buttonStyle="solid"
+                            >
+                              <Radio.Button value="PENDING">
+                                Chờ duyệt {pendingCount > 0 && `(${pendingCount})`}
+                              </Radio.Button>
+                              <Radio.Button value="APPROVED">Đã duyệt (Lịch sử)</Radio.Button>
+                              <Radio.Button value="REJECTED">Đã từ chối</Radio.Button>
+                              <Radio.Button value="ALL">Tất cả</Radio.Button>
+                            </Radio.Group>
+                          </Space>
+                          <Text type="secondary" style={{ fontSize: 13 }}>
+                            {approvalFilter === 'PENDING'
+                              ? 'Danh sách đơn xin nghỉ phép / Remote cấp dưới cần duyệt'
+                              : 'Lịch sử xét duyệt đầy đủ để đối chiếu và tra cứu khi có khiếu nại'}
+                          </Text>
+                        </div>
+                        <Table
+                          dataSource={approvalRequests}
+                          rowKey="leave_request_id"
+                          loading={loading}
+                          columns={[
+                            {
+                              title: 'Nhân viên',
+                              key: 'employee',
+                              render: (_, req: LeaveRequest) => (
+                                <div>
+                                  <span style={{ fontWeight: 600 }}>{req.employee?.full_name || `Nhân viên #${req.employee_id}`}</span>
+                                  <div style={{ fontSize: 12, color: '#64748b' }}>
+                                    <Tag color="geekblue" style={{ fontSize: 11, padding: '0 4px', marginRight: 4 }}>
+                                      {req.employee?.employee_code || `NV#${req.employee_id}`}
+                                    </Tag>
+                                    {req.employee?.email}
+                                  </div>
+                                </div>
+                              ),
+                            },
+                            {
+                              title: 'Ngày nghỉ / Remote',
+                              dataIndex: 'leave_date',
+                              key: 'leave_date',
+                              render: (d) => <b>{d}</b>,
+                            },
+                            {
+                              title: 'Buổi làm / Nghỉ',
+                              dataIndex: 'session',
+                              key: 'session',
+                              render: (s) => (
+                                <Tag color={s === 'FULL_DAY' ? 'blue' : 'cyan'}>
+                                  {s === 'FULL_DAY' ? 'Cả ngày (1.0)' : s === 'MORNING' ? 'Sáng (0.5)' : 'Chiều (0.5)'}
+                                </Tag>
+                              ),
+                            },
+                            {
+                              title: 'Loại đơn',
+                              dataIndex: 'leave_type',
+                              key: 'leave_type',
+                              render: (lt) => {
+                                if (lt?.leave_code === 'REMOTE') {
+                                  return <Tag color="cyan">Làm việc từ xa (Remote)</Tag>;
+                                }
+                                return lt?.leave_name || 'Phép năm';
+                              },
+                            },
+                            {
+                              title: 'Lý do',
+                              dataIndex: 'reason',
+                              key: 'reason',
+                            },
+                            {
+                              title: 'Trạng thái',
+                              dataIndex: 'status',
+                              key: 'status',
+                              render: (st) => (
+                                <Tag color={st === 'APPROVED' ? 'success' : st === 'REJECTED' ? 'error' : 'warning'}>
+                                  {st === 'APPROVED' ? 'ĐÃ DUYỆT' : st === 'REJECTED' ? 'TỪ CHỐI' : 'CHỜ DUYỆT'}
+                                </Tag>
+                              ),
+                            },
+                            {
+                              title: 'Thông tin duyệt',
+                              key: 'reviewer_info',
+                              render: (_, req: LeaveRequest) => {
+                                if (req.status === 'PENDING') {
+                                  return <span style={{ color: '#9ca3af' }}>Chưa duyệt</span>;
+                                }
+                                const reviewerName = req.reviewer?.full_name || (req.reviewer_employee_id ? `Quản lý #${req.reviewer_employee_id}` : 'Quản lý');
+                                return (
+                                  <div>
+                                    <div style={{ fontSize: 13, fontWeight: 500 }}>{reviewerName}</div>
+                                    {req.reviewed_at && (
+                                      <div style={{ fontSize: 12, color: '#6b7280' }}>
+                                        {dayjs(req.reviewed_at).format('DD/MM/YYYY HH:mm')}
+                                      </div>
+                                    )}
+                                    {req.review_note && (
+                                      <div style={{ fontSize: 12, color: '#4b5563', fontStyle: 'italic', marginTop: 2 }}>
+                                        "{req.review_note}"
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              },
+                            },
+                            {
+                              title: 'Hành động',
+                              key: 'actions',
+                              render: (_, req: LeaveRequest) => {
+                                if (req.status === 'PENDING') {
+                                  return (
+                                    <Space size="small">
+                                      <Button
+                                        type="primary"
+                                        size="small"
+                                        icon={<CheckOutlined />}
+                                        onClick={() => {
+                                          setReviewingReq(req);
+                                          setReviewAction('APPROVED');
+                                          setReviewNote('Đồng ý duyệt');
+                                          setReviewModalOpen(true);
+                                        }}
+                                        style={{ background: '#16a34a' }}
+                                      >
+                                        Duyệt
+                                      </Button>
+                                      <Button
+                                        danger
+                                        size="small"
+                                        icon={<CloseOutlined />}
+                                        onClick={() => {
+                                          setReviewingReq(req);
+                                          setReviewAction('REJECTED');
+                                          setReviewNote('Từ chối nghỉ');
+                                          setReviewModalOpen(true);
+                                        }}
+                                      >
+                                        Từ chối
+                                      </Button>
+                                    </Space>
+                                  );
+                                }
+                                return <Tag color="default">Đã xử lý</Tag>;
+                              },
+                            },
+                          ]}
+                        />
+                      </div>
                     ),
                   },
                 ]
+
               : []),
           ]}
         />
@@ -388,20 +530,21 @@ export const LeavePage: React.FC = () => {
       <Modal
         open={createModalOpen}
         onCancel={() => setCreateModalOpen(false)}
-        title="Lập đơn xin nghỉ phép"
+        title="Lập đơn xin nghỉ phép / Làm việc từ xa (Remote)"
+        forceRender
         footer={null}
-        width={520}
+        width={540}
       >
         <Form form={form} layout="vertical" onFinish={handleCreateLeave}>
           <Form.Item
             name="leave_type_id"
-            label="Loại nghỉ phép"
-            rules={[{ required: true, message: 'Vui lòng chọn loại nghỉ phép!' }]}
+            label="Loại đơn"
+            rules={[{ required: true, message: 'Vui lòng chọn loại đơn!' }]}
           >
-            <Select>
+            <Select placeholder="-- Chọn loại đơn xin nghỉ / làm việc từ xa --" loading={leaveTypes.length === 0}>
               {leaveTypes.map((lt) => (
                 <Select.Option key={lt.leave_type_id} value={lt.leave_type_id}>
-                  {lt.leave_name} {lt.is_paid ? '(Hưởng lương)' : '(Không hưởng lương)'}
+                  {lt.leave_name} {lt.leave_code === 'REMOTE' ? '(Hưởng 100% lương • Không trừ phép năm)' : lt.is_paid ? '(Hưởng lương)' : '(Không hưởng lương)'}
                 </Select.Option>
               ))}
             </Select>

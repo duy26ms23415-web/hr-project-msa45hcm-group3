@@ -73,6 +73,15 @@ class AttendanceFixReview(BaseModel):
     review_note: Optional[str] = None
 
 
+class AttendanceEmployeeBrief(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    employee_id: int
+    employee_code: Optional[str] = None
+    full_name: str
+    email: Optional[str] = None
+
+
 class AttendanceFixResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -87,3 +96,5 @@ class AttendanceFixResponse(BaseModel):
     reviewed_at: Optional[datetime] = None
     review_note: Optional[str] = None
     created_at: datetime
+    employee: Optional[AttendanceEmployeeBrief] = None
+    reviewer: Optional[AttendanceEmployeeBrief] = None

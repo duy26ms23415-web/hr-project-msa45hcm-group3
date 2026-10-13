@@ -24,37 +24,39 @@ class AttendanceService:
     def calculate_worked_minutes(check_in: Optional[datetime], check_out: Optional[datetime]) -> int:
         """
         Calculate worked minutes within 08:00 - 17:00 excluding lunch break (12:00 - 13:00).
+        Times are normalized to Vietnam timezone (UTC+7).
         """
-        if not check_in or not check_out or check_out <= check_in:
-            return 0
-        
-        # Localize or normalize to same date
-        start_time = check_in.time()
-        end_time = check_out.time()
-
-        # Office window: 08:00 to 17:00
-        w_start = time(8, 0)
-        w_end = time(17, 0)
-        l_start = time(12, 0)
-        l_end = time(13, 0)
-
-        eff_start = max(start_time, w_start)
-        eff_end = min(end_time, w_end)
-
-        if eff_end <= eff_start:
+        if not check_in or not check_out:
             return 0
 
-        total_seconds = (datetime.combine(check_in.date(), eff_end) - datetime.combine(check_in.date(), eff_start)).total_seconds()
-        total_minutes = int(total_seconds // 60)
+        # PostgreSQL stores UTC timestamps. Legacy naive values are treated as UTC.
+        local_timezone = timezone(timedelta(hours=7))
+        def to_local(value: datetime) -> datetime:
+            if value.tzinfo is None:
+                value = value.replace(tzinfo=timezone.utc)
+            return value.astimezone(local_timezone)
 
-        # Subtract lunch break overlap (between 12:00 and 13:00)
-        overlap_start = max(eff_start, l_start)
-        overlap_end = min(eff_end, l_end)
-        if overlap_end > overlap_start:
-            lunch_minutes = int((datetime.combine(check_in.date(), overlap_end) - datetime.combine(check_in.date(), overlap_start)).total_seconds() // 60)
-            total_minutes -= lunch_minutes
+        local_in = to_local(check_in)
+        local_out = to_local(check_out)
+        if local_out <= local_in:
+            return 0
 
-        return max(0, total_minutes)
+
+        work_date = local_in.date()
+        window_start = datetime.combine(work_date, time(8, 0), tzinfo=local_timezone)
+        window_end = datetime.combine(work_date, time(17, 0), tzinfo=local_timezone)
+        effective_start = max(local_in, window_start)
+        effective_end = min(local_out, window_end)
+        if effective_end <= effective_start:
+            return 0
+
+        lunch_start = datetime.combine(work_date, time(12, 0), tzinfo=local_timezone)
+        lunch_end = datetime.combine(work_date, time(13, 0), tzinfo=local_timezone)
+        lunch_overlap = max(
+            0, (min(effective_end, lunch_end) - max(effective_start, lunch_start)).total_seconds()
+        )
+        worked_seconds = (effective_end - effective_start).total_seconds() - lunch_overlap
+        return max(0, int(worked_seconds // 60))
 
     @staticmethod
     async def issue_qr_card(
@@ -76,6 +78,9 @@ class AttendanceService:
         # Check if a card with this exact token_hash already exists
         stmt_existing = select(QRCard).where(QRCard.token_hash == t_hash)
         existing_card = (await db.execute(stmt_existing)).scalars().first()
+
+        if existing_card and existing_card.employee_id != employee_id:
+            raise HTTPException(status_code=409, detail="Mã QR đã thuộc về nhân viên khác")
 
         # Revoke any prior active QR cards for this employee
         stmt_active = select(QRCard).where(
@@ -152,8 +157,8 @@ class AttendanceService:
     async def recalculate_day(db: AsyncSession, employee_id: int, work_date: date):
         """Aggregate all valid scan/fix events for the employee on work_date"""
         # Fetch all events on this date (converted to local date UTC+7)
-        day_start_utc = datetime.combine(work_date, time(0, 0)) - timedelta(hours=7)
-        day_end_utc = datetime.combine(work_date, time(23, 59, 59)) - timedelta(hours=7)
+        day_start_utc = datetime.combine(work_date, time(0, 0), tzinfo=timezone.utc) - timedelta(hours=7)
+        day_end_utc = datetime.combine(work_date, time(23, 59, 59, 999999), tzinfo=timezone.utc) - timedelta(hours=7)
 
         stmt = select(AttendanceEvent).where(
             and_(
@@ -269,7 +274,7 @@ class AttendanceService:
     ) -> AttendanceFix:
         """Review attendance fix. Must be the employee's direct manager or admin."""
         stmt = select(AttendanceFix).where(AttendanceFix.attendance_fix_id == fix_id).options(
-            selectinload(AttendanceFix.employee)
+            selectinload(AttendanceFix.employee).selectinload(Employee.department)
         )
         fix = (await db.execute(stmt)).scalar_one_or_none()
         if not fix:
@@ -277,8 +282,18 @@ class AttendanceService:
         if fix.status != "PENDING":
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Request is already {fix.status}")
 
-        # Manager authority check
-        if not is_admin and fix.employee.manager_employee_id != reviewer_employee_id:
+        # Lock the employee row so reassignment cannot race the authorization check and commit.
+        employee = (await db.execute(
+            select(Employee).where(Employee.employee_id == fix.employee_id).options(selectinload(Employee.department)).with_for_update()
+        )).scalar_one_or_none()
+        if not employee:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Employee not found")
+
+        is_direct_manager = (
+            employee.manager_employee_id == reviewer_employee_id
+            or (getattr(employee, "department", None) and employee.department.manager_employee_id == reviewer_employee_id)
+        )
+        if fix.employee_id == reviewer_employee_id or (not is_admin and not is_direct_manager):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Only the direct manager can approve or reject this attendance fix"
@@ -306,12 +321,16 @@ class AttendanceService:
         fix.review_note = review_in.review_note
 
         if review_in.status == "APPROVED":
-            # Generate approved adjustment event
+            # Generate approved adjustment event (ensure UTC timestamp)
+            req_at = fix.requested_at
+            if req_at.tzinfo is None:
+                req_at = req_at.replace(tzinfo=timezone(timedelta(hours=7))).astimezone(timezone.utc)
+
             event = AttendanceEvent(
                 employee_id=fix.employee_id,
                 event_type=fix.event_type,
                 source="APPROVED_FIX",
-                occurred_at=fix.requested_at,
+                occurred_at=req_at,
                 idempotency_key=f"FIX-APPROVED-{fix.attendance_fix_id}-{secrets.token_hex(6)}",
                 attendance_fix_id=fix.attendance_fix_id
             )

@@ -109,7 +109,18 @@ export const KioskScanPage: React.FC = () => {
       }, 4000);
     } catch (err: any) {
       playBeep(false);
-      const errMsg = err.response?.data?.detail || 'Thẻ QR không hợp lệ hoặc thiết bị chưa được ủy quyền!';
+      const detail = err.response?.data?.detail;
+      const httpStatus = err.response?.status;
+      const fallbackMessage = !err.response
+        ? 'Không kết nối được máy chủ. Vui lòng kiểm tra mạng và thử lại.'
+        : httpStatus === 401 || httpStatus === 403
+          ? 'Thiết bị chưa được ủy quyền quét thẻ.'
+          : httpStatus >= 500
+            ? `Máy chủ gặp lỗi (HTTP ${httpStatus}). Vui lòng thử lại hoặc kiểm tra log GCP.`
+            : httpStatus === 400
+              ? 'Thẻ QR không hợp lệ, hết hạn hoặc đã bị thu hồi.'
+              : `Không quét được thẻ (HTTP ${httpStatus}). Vui lòng thử lại.`;
+      const errMsg = typeof detail === 'string' ? detail : fallbackMessage;
       setScanError(errMsg);
       setTimeout(() => {
         setScanError(null);
@@ -492,7 +503,7 @@ export const KioskScanPage: React.FC = () => {
                   {lastScanResult.message || 'Chấm công thành công!'}
                 </div>
                 <div style={{ fontSize: 12, color: '#166534', marginTop: 2 }}>
-                  Loại quẹt: <b>{lastScanResult.event_type}</b> • Thời gian: {new Date(lastScanResult.event_time).toLocaleTimeString()}
+                  Loại quẹt: <b>{lastScanResult.event_type}</b> • Thời gian: {new Date(lastScanResult.event_time || lastScanResult.occurred_at).toLocaleTimeString([], { hour12: false })}
                 </div>
               </div>
             </div>

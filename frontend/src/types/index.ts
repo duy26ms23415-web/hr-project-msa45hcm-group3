@@ -8,6 +8,7 @@ export interface User {
 
 export interface Employee {
   employee_id: number;
+  has_login_account: boolean;
   employee_code: string;
   full_name: string;
   email: string;
@@ -42,7 +43,7 @@ export interface AttendanceRecord {
   first_check_in_at?: string;
   last_check_out_at?: string;
   worked_minutes: number;
-  attendance_status: 'PRESENT' | 'INCOMPLETE' | 'ABSENT' | 'ON_LEAVE' | 'HOLIDAY';
+  attendance_status: 'PRESENT' | 'INCOMPLETE' | 'ABSENT' | 'ON_LEAVE' | 'HOLIDAY' | 'REMOTE';
   updated_at: string;
 }
 
@@ -58,6 +59,18 @@ export interface AttendanceFix {
   reviewed_at?: string;
   review_note?: string;
   created_at: string;
+  employee?: {
+    employee_id: number;
+    employee_code?: string;
+    full_name: string;
+    email?: string;
+  };
+  reviewer?: {
+    employee_id: number;
+    employee_code?: string;
+    full_name: string;
+    email?: string;
+  };
 }
 
 export interface LeaveBalance {
@@ -87,6 +100,18 @@ export interface LeaveRequest {
     leave_code: string;
     leave_name: string;
     is_paid: boolean;
+  };
+  employee?: {
+    employee_id: number;
+    employee_code: string;
+    full_name: string;
+    email: string;
+  };
+  reviewer?: {
+    employee_id: number;
+    employee_code?: string;
+    full_name: string;
+    email?: string;
   };
 }
 

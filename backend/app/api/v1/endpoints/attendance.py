@@ -1,5 +1,5 @@
 from datetime import date, datetime, timedelta, timezone, time
-from typing import List, Optional
+from typing import List, Optional, Literal
 from pydantic import BaseModel
 # pyrefly: ignore [missing-import]
 from fastapi import APIRouter, Depends, HTTPException, status, Query
@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.api.deps import get_current_user, require_roles, verify_kiosk_secret
 from app.models.auth import UserAccount
-from app.models.organization import Employee
+from app.models.organization import Employee, Department
 from app.models.attendance import AttendanceDay, AttendanceFix, QRCard, AttendanceEvent
 from app.schemas.attendance import (
     QRCardCreateResponse, QRCardResponse,
@@ -19,6 +19,7 @@ from app.schemas.attendance import (
     AttendanceFixCreate, AttendanceFixReview, AttendanceFixResponse
 )
 from app.services.attendance_service import AttendanceService, hash_token
+from app.services.ai_access import require_known_role, require_reviewer_role
 
 router = APIRouter()
 
@@ -58,19 +59,25 @@ async def get_employee_qr_cards(
     db: AsyncSession = Depends(get_db),
     current_user: UserAccount = Depends(require_roles(["HR", "ADMIN", "MANAGER"]))
 ):
-    """List issued QR cards for employee (auto-issue if none exists)"""
+    """Read QR cards within the caller's employee scope; issuance uses POST."""
+    employee = (await db.execute(
+        select(Employee).where(Employee.employee_id == employee_id)
+    )).scalar_one_or_none()
+    if not employee:
+        raise HTTPException(status_code=404, detail="Không tìm thấy nhân viên")
+    role_codes = {assignment.role.role_code for assignment in current_user.role_assignments}
+    if not role_codes.intersection({"ADMIN", "HR"}) and (
+        current_user.employee_id is None
+        or (employee.employee_id != current_user.employee_id
+            and employee.manager_employee_id != current_user.employee_id)
+    ):
+        raise HTTPException(status_code=404, detail="Không tìm thấy nhân viên")
     stmt = select(QRCard).where(
         and_(QRCard.employee_id == employee_id, QRCard.revoked_at.is_(None))
     ).order_by(QRCard.issued_at.desc())
     result = await db.execute(stmt)
     cards = result.scalars().all()
     
-    if not cards:
-        new_card, _ = await AttendanceService.issue_qr_card(db, employee_id, current_user.user_account_id)
-        await db.commit()
-        await db.refresh(new_card)
-        cards = [new_card]
-
     return cards
 
 
@@ -117,7 +124,7 @@ async def process_kiosk_scan_direct(
     now_utc = datetime.now(timezone.utc)
     local_date = (now_utc + timedelta(hours=7)).date()
     day_start_utc = datetime.combine(local_date, time(0, 0), tzinfo=timezone.utc) - timedelta(hours=7)
-    day_end_utc = datetime.combine(local_date, time(23, 59, 59), tzinfo=timezone.utc) - timedelta(hours=7)
+    day_end_utc = datetime.combine(local_date, time(23, 59, 59, 999999), tzinfo=timezone.utc) - timedelta(hours=7)
 
     stmt_ev = select(AttendanceEvent).where(
         and_(
@@ -128,7 +135,8 @@ async def process_kiosk_scan_direct(
     ).order_by(AttendanceEvent.occurred_at.desc())
     latest_event = (await db.execute(stmt_ev)).scalars().first()
 
-    event_type = "CHECK_OUT" if (latest_event and latest_event.event_type == "CHECK_IN") else "CHECK_IN"
+    # Nguyên tắc: Lần scan đầu tiên trong ngày luôn là CHECK_IN. Các lần sau đều là CHECK_OUT
+    event_type = "CHECK_OUT" if latest_event else "CHECK_IN"
 
     idempotency_key = f"SCAN-{qr_card.employee_id}-{event_type}-{int(now_utc.timestamp() // 15)}"
     scan_req = ScanRequest(
@@ -238,30 +246,76 @@ async def create_attendance_fix(
     """Employee submits a fix request for missing check-in or check-out"""
     fix = await AttendanceService.create_fix_request(db, current_user.employee_id, fix_in)
     await db.commit()
-    await db.refresh(fix)
+    stmt = (
+        select(AttendanceFix)
+        .where(AttendanceFix.attendance_fix_id == fix.attendance_fix_id)
+        .options(
+            selectinload(AttendanceFix.employee),
+            selectinload(AttendanceFix.reviewer),
+        )
+    )
+    fix = (await db.execute(stmt)).scalar_one()
     return fix
 
 
 @router.get("/fixes", response_model=List[AttendanceFixResponse])
 async def list_attendance_fixes(
     status_filter: Optional[str] = Query(None, alias="status"),
+    view: Optional[Literal["mine", "approvals", "visible"]] = None,
+    mine: Optional[bool] = Query(None),
     db: AsyncSession = Depends(get_db),
     current_user: UserAccount = Depends(get_current_user)
 ):
     """List attendance fixes (Employee sees own, Manager sees subordinate's)"""
     user_roles = [ra.role.role_code for ra in current_user.role_assignments]
-    stmt = select(AttendanceFix).order_by(AttendanceFix.created_at.desc())
+    role_set = set(user_roles)
+    require_known_role(role_set)
+    stmt = (
+        select(AttendanceFix)
+        .options(
+            selectinload(AttendanceFix.employee),
+            selectinload(AttendanceFix.reviewer),
+        )
+        .order_by(AttendanceFix.created_at.desc())
+    )
 
-    if "ADMIN" in user_roles or "HR" in user_roles:
-        pass  # sees all
+    if mine is True or view == "mine":
+        stmt = stmt.where(AttendanceFix.employee_id == current_user.employee_id)
+    elif view == "approvals":
+        require_reviewer_role(role_set)
+        if status_filter not in (None, "PENDING"):
+            raise HTTPException(status_code=422, detail="Approvals view only lists pending requests")
+        direct_reports = (
+            select(Employee.employee_id)
+            .outerjoin(Department, Employee.department_id == Department.department_id)
+            .where(
+                (Employee.manager_employee_id == current_user.employee_id) |
+                (Department.manager_employee_id == current_user.employee_id)
+            )
+        )
+        stmt = stmt.where(
+            AttendanceFix.employee_id.in_(direct_reports),
+            AttendanceFix.status == "PENDING",
+        )
+    elif "ADMIN" in user_roles or "HR" in user_roles:
+        pass
     elif "MANAGER" in user_roles:
-        # Sees own or direct subordinates
+        direct_reports = (
+            select(Employee.employee_id)
+            .outerjoin(Department, Employee.department_id == Department.department_id)
+            .where(
+                (Employee.manager_employee_id == current_user.employee_id) |
+                (Department.manager_employee_id == current_user.employee_id)
+            )
+        )
         stmt = stmt.where(
             (AttendanceFix.employee_id == current_user.employee_id) |
+            AttendanceFix.employee_id.in_(direct_reports) |
             (AttendanceFix.reviewer_employee_id == current_user.employee_id)
         )
     else:
         stmt = stmt.where(AttendanceFix.employee_id == current_user.employee_id)
+
 
     if status_filter:
         stmt = stmt.where(AttendanceFix.status == status_filter)
@@ -278,15 +332,21 @@ async def approve_attendance_fix(
     current_user: UserAccount = Depends(get_current_user)
 ):
     """Direct Manager approves attendance fix and recalculates day"""
-    user_roles = [ra.role.role_code for ra in current_user.role_assignments]
-    is_admin = "ADMIN" in user_roles
-
+    is_admin = "ADMIN" in {ra.role.role_code for ra in current_user.role_assignments}
     review_in.status = "APPROVED"
     fix = await AttendanceService.review_fix_request(
         db, fix_id, current_user.employee_id, review_in, is_admin=is_admin
     )
     await db.commit()
-    await db.refresh(fix)
+    stmt = (
+        select(AttendanceFix)
+        .where(AttendanceFix.attendance_fix_id == fix.attendance_fix_id)
+        .options(
+            selectinload(AttendanceFix.employee),
+            selectinload(AttendanceFix.reviewer),
+        )
+    )
+    fix = (await db.execute(stmt)).scalar_one()
     return fix
 
 
@@ -298,13 +358,23 @@ async def reject_attendance_fix(
     current_user: UserAccount = Depends(get_current_user)
 ):
     """Direct Manager rejects attendance fix"""
-    user_roles = [ra.role.role_code for ra in current_user.role_assignments]
-    is_admin = "ADMIN" in user_roles
+    require_reviewer_role({ra.role.role_code for ra in current_user.role_assignments})
 
+    is_admin = "ADMIN" in {ra.role.role_code for ra in current_user.role_assignments}
     review_in.status = "REJECTED"
     fix = await AttendanceService.review_fix_request(
         db, fix_id, current_user.employee_id, review_in, is_admin=is_admin
     )
     await db.commit()
-    await db.refresh(fix)
+    stmt = (
+        select(AttendanceFix)
+        .where(AttendanceFix.attendance_fix_id == fix.attendance_fix_id)
+        .options(
+            selectinload(AttendanceFix.employee),
+            selectinload(AttendanceFix.reviewer),
+        )
+    )
+    fix = (await db.execute(stmt)).scalar_one()
     return fix
+
+

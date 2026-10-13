@@ -17,12 +17,14 @@ import {
   Typography,
   Alert,
   Tooltip,
+  Badge,
 } from 'antd';
 import {
   ClockCircleOutlined,
   PlusOutlined,
   CheckOutlined,
   CloseOutlined,
+  CheckCircleOutlined,
   AuditOutlined,
   InfoCircleOutlined,
 } from '@ant-design/icons';
@@ -30,23 +32,44 @@ import dayjs from 'dayjs';
 import { useAuth } from '../context/AuthContext';
 import api from '../api/client';
 import type { AttendanceRecord, AttendanceFix, Employee } from '../types';
+import { useLocation, useNavigate } from 'react-router-dom';
 
 const { Title, Text } = Typography;
 
 export const AttendancePage: React.FC = () => {
   const { user, hasRole } = useAuth();
   const [activeTab, setActiveTab] = useState('records');
-  const isAdmin = hasRole(['ADMIN']);
+  const showEmployeeIdentity = hasRole(['ADMIN', 'HR', 'MANAGER']);
   const [employeesById, setEmployeesById] = useState<Record<number, Employee>>({});
   const [records, setRecords] = useState<AttendanceRecord[]>([]);
   const [myFixes, setMyFixes] = useState<AttendanceFix[]>([]);
-  const [pendingFixes, setPendingFixes] = useState<AttendanceFix[]>([]);
+  const [approvalFixes, setApprovalFixes] = useState<AttendanceFix[]>([]);
+  const [approvalFilter, setApprovalFilter] = useState<'PENDING' | 'APPROVED' | 'REJECTED' | 'ALL'>('PENDING');
+  const [pendingCount, setPendingCount] = useState<number>(0);
   const [loading, setLoading] = useState(false);
 
   // Modal create fix request
   const [fixModalOpen, setFixModalOpen] = useState(false);
   const [form] = Form.useForm();
   const [submitting, setSubmitting] = useState(false);
+  const location = useLocation();
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    const draft = location.state?.aiDraft;
+    if (!draft) return;
+    form.resetFields();
+    form.setFieldsValue({ ...draft, work_date: dayjs(draft.work_date), requested_time: draft.requested_time ? dayjs(`${draft.work_date}T${draft.requested_time}`) : undefined });
+    setFixModalOpen(true);
+    navigate(location.pathname, { replace: true, state: null });
+  }, [location.state, location.pathname, form, navigate]);
+
+  useEffect(() => {
+    if (location.state?.aiTab === 'approvals') {
+      setActiveTab('approvals');
+      navigate(location.pathname, { replace: true, state: null });
+    }
+  }, [location.state, location.pathname, navigate]);
 
   // Review modal
   const [reviewingFix, setReviewingFix] = useState<AttendanceFix | null>(null);
@@ -57,16 +80,21 @@ export const AttendancePage: React.FC = () => {
   const fetchRecords = async () => {
     try {
       setLoading(true);
-      const [res, employeesRes] = await Promise.all([
+      const [res, employeesRes, ownProfileRes] = await Promise.all([
         api.get('/attendance/records'),
-        isAdmin ? api.get<Employee[]>('/employees') : Promise.resolve(null),
+        showEmployeeIdentity ? api.get<Employee[]>('/employees').catch(() => null) : Promise.resolve(null),
+        hasRole(['MANAGER']) && !hasRole(['ADMIN', 'HR']) && user?.employee_id != null
+          ? api.get<Employee>(`/employees/${user.employee_id}`).catch(() => null)
+          : Promise.resolve(null),
       ]);
       setRecords(res.data);
-      if (employeesRes) {
-        setEmployeesById(Object.fromEntries(
-          employeesRes.data.map((employee) => [employee.employee_id, employee])
-        ));
-      }
+      const profiles = [
+        ...(employeesRes?.data || []),
+        ...(ownProfileRes ? [ownProfileRes.data] : []),
+      ];
+      setEmployeesById(Object.fromEntries(
+        profiles.map((employee) => [employee.employee_id, employee])
+      ));
     } catch (e) {
       console.error(e);
     } finally {
@@ -77,7 +105,7 @@ export const AttendancePage: React.FC = () => {
   const fetchMyFixes = async () => {
     try {
       setLoading(true);
-      const res = await api.get('/attendance/fixes');
+      const res = await api.get('/attendance/fixes?mine=true');
       setMyFixes(res.data);
     } catch (e) {
       console.error(e);
@@ -86,12 +114,23 @@ export const AttendancePage: React.FC = () => {
     }
   };
 
-  const fetchPendingFixes = async () => {
-    if (!hasRole(['MANAGER', 'ADMIN'])) return;
+  const fetchApprovalFixes = async (filter: 'PENDING' | 'APPROVED' | 'REJECTED' | 'ALL' = approvalFilter) => {
+    if (!hasRole(['MANAGER', 'HR', 'ADMIN'])) return;
     try {
       setLoading(true);
-      const res = await api.get('/attendance/fixes?status=PENDING');
-      setPendingFixes(res.data);
+      const url = filter === 'ALL' ? '/attendance/fixes' : `/attendance/fixes?status=${filter}`;
+      const res = await api.get(url);
+      const list = res.data.filter((f: any) => f.employee_id !== user?.employee_id);
+      setApprovalFixes(list);
+
+      // Đồng thời cập nhật số lượng đơn PENDING để hiển thị badge
+      if (filter === 'PENDING') {
+        setPendingCount(list.length);
+      } else {
+        const pendingRes = await api.get('/attendance/fixes?status=PENDING');
+        const pendingList = pendingRes.data.filter((f: any) => f.employee_id !== user?.employee_id);
+        setPendingCount(pendingList.length);
+      }
     } catch (e) {
       console.error(e);
     } finally {
@@ -100,17 +139,20 @@ export const AttendancePage: React.FC = () => {
   };
 
   useEffect(() => {
-    if (activeTab === 'records') fetchRecords();
+    if (activeTab === 'records') {
+      fetchRecords();
+      fetchMyFixes();
+    }
     if (activeTab === 'my-fixes') fetchMyFixes();
-    if (activeTab === 'approvals') fetchPendingFixes();
-  }, [activeTab, isAdmin]);
+    if (activeTab === 'approvals') fetchApprovalFixes(approvalFilter);
+  }, [activeTab, approvalFilter, showEmployeeIdentity, user?.employee_id]);
 
   const handleCreateFix = async (values: any) => {
     setSubmitting(true);
     try {
       const workDateStr = values.work_date.format('YYYY-MM-DD');
       const timeStr = values.requested_time.format('HH:mm:ss');
-      const requestedAt = `${workDateStr}T${timeStr}`;
+      const requestedAt = `${workDateStr}T${timeStr}+07:00`;
 
       await api.post('/attendance/fixes', {
         work_date: workDateStr,
@@ -122,8 +164,8 @@ export const AttendancePage: React.FC = () => {
       message.success('Đã gửi giải trình chấm công đến Quản lý trực tiếp!');
       setFixModalOpen(false);
       form.resetFields();
-      if (activeTab === 'my-fixes') fetchMyFixes();
-      else setActiveTab('my-fixes');
+      fetchMyFixes();
+      if (activeTab !== 'my-fixes') setActiveTab('my-fixes');
     } catch (err: any) {
       message.error(err.response?.data?.detail || 'Lỗi khi gửi giải trình!');
     } finally {
@@ -134,7 +176,7 @@ export const AttendancePage: React.FC = () => {
   const handleReviewSubmit = async () => {
     if (!reviewingFix) return;
     try {
-      await api.post(`/attendance/fixes/${reviewingFix.attendance_fix_id}/review`, {
+      await api.post(`/attendance/fixes/${reviewingFix.attendance_fix_id}/${reviewAction === 'APPROVED' ? 'approve' : 'reject'}`, {
         status: reviewAction,
         review_note: reviewNote,
       });
@@ -142,7 +184,8 @@ export const AttendancePage: React.FC = () => {
       setReviewModalOpen(false);
       setReviewingFix(null);
       setReviewNote('');
-      fetchPendingFixes();
+      fetchApprovalFixes(approvalFilter);
+      fetchRecords();
     } catch (err: any) {
       message.error(err.response?.data?.detail || 'Lỗi khi phê duyệt!');
     }
@@ -217,7 +260,7 @@ export const AttendancePage: React.FC = () => {
                   rowKey="attendance_day_id"
                   loading={loading}
                   columns={[
-                    ...(isAdmin ? [
+                    ...(showEmployeeIdentity ? [
                       {
                         title: 'Họ và tên',
                         key: 'employee_full_name',
@@ -241,13 +284,23 @@ export const AttendancePage: React.FC = () => {
                       title: 'Giờ vào (Check-in)',
                       dataIndex: 'first_check_in_at',
                       key: 'first_check_in_at',
-                      render: (t) => (t ? dayjs(t).format('HH:mm:ss') : <span style={{ color: '#ef4444' }}>Chưa quẹt</span>),
+                      render: (t, record: AttendanceRecord) => {
+                        if (record.attendance_status === 'REMOTE') {
+                          return <span style={{ color: '#0284c7' }}>Làm việc từ xa</span>;
+                        }
+                        return t ? dayjs(t).format('HH:mm:ss') : <span style={{ color: '#ef4444' }}>Chưa quẹt</span>;
+                      },
                     },
                     {
                       title: 'Giờ ra (Check-out)',
                       dataIndex: 'last_check_out_at',
                       key: 'last_check_out_at',
-                      render: (t) => (t ? dayjs(t).format('HH:mm:ss') : <span style={{ color: '#ef4444' }}>Chưa quẹt</span>),
+                      render: (t, record: AttendanceRecord) => {
+                        if (record.attendance_status === 'REMOTE') {
+                          return <span style={{ color: '#0284c7' }}>Làm việc từ xa</span>;
+                        }
+                        return t ? dayjs(t).format('HH:mm:ss') : <span style={{ color: '#ef4444' }}>Chưa quẹt</span>;
+                      },
                     },
                     {
                       title: 'Tổng giờ làm',
@@ -262,6 +315,7 @@ export const AttendancePage: React.FC = () => {
                       render: (status) => {
                         let color = 'default';
                         if (status === 'PRESENT') color = 'success';
+                        else if (status === 'REMOTE') return <Tag color="cyan">Làm việc từ xa (REMOTE)</Tag>;
                         else if (status === 'INCOMPLETE') color = 'warning';
                         else if (status === 'ON_LEAVE') color = 'processing';
                         else if (status === 'HOLIDAY') color = 'purple';
@@ -270,13 +324,78 @@ export const AttendancePage: React.FC = () => {
                       },
                     },
                     {
+                      title: 'Đối chiếu giải trình',
+                      key: 'fix_audit',
+                      render: (_, record: AttendanceRecord) => {
+                        const dayFixes = myFixes.filter((f) => f.work_date === record.work_date);
+                        if (dayFixes.length === 0) return <span style={{ color: '#9ca3af' }}>-</span>;
+
+                        const approvedFixes = dayFixes.filter((f) => f.status === 'APPROVED');
+                        const pendingFixesForDay = dayFixes.filter((f) => f.status === 'PENDING');
+                        const rejectedFixes = dayFixes.filter((f) => f.status === 'REJECTED');
+
+                        return (
+                          <Space direction="vertical" size={2}>
+                            {approvedFixes.map((f) => {
+                              const reviewerName = f.reviewer?.full_name || employeesById[f.reviewer_employee_id || 0]?.full_name || 'Quản lý';
+                              return (
+                                <Tooltip
+                                  key={f.attendance_fix_id}
+                                  title={
+                                    <div>
+                                      <div><b>Đã duyệt {f.event_type} lúc {dayjs(f.requested_at).format('HH:mm:ss')}</b></div>
+                                      <div>Lý do NV: {f.reason}</div>
+                                      <div>Người duyệt: {reviewerName} ({f.reviewed_at ? dayjs(f.reviewed_at).format('DD/MM/YYYY HH:mm') : ''})</div>
+                                      {f.review_note && <div>Ghi chú duyệt: "{f.review_note}"</div>}
+                                    </div>
+                                  }
+                                >
+                                  <Tag color="cyan" icon={<CheckCircleOutlined />} style={{ cursor: 'pointer' }}>
+                                    Đã duyệt bù {f.event_type === 'CHECK_IN' ? 'Vào' : 'Ra'}
+                                  </Tag>
+                                </Tooltip>
+                              );
+                            })}
+                            {pendingFixesForDay.map((f) => (
+                              <Tooltip key={f.attendance_fix_id} title={`Đang chờ Quản lý duyệt: ${f.reason}`}>
+                                <Tag color="orange" icon={<ClockCircleOutlined />} style={{ cursor: 'pointer' }}>
+                                  Chờ duyệt {f.event_type === 'CHECK_IN' ? 'Vào' : 'Ra'}
+                                </Tag>
+                              </Tooltip>
+                            ))}
+                            {rejectedFixes.length > 0 && pendingFixesForDay.length === 0 && (
+                              <Tooltip
+                                key="rejected"
+                                title={
+                                  <div>
+                                    <div><b>Giải trình bị từ chối</b></div>
+                                    {rejectedFixes.map((f) => (
+                                      <div key={f.attendance_fix_id}>
+                                        • {f.event_type}: "{f.review_note || 'Không có ghi chú'}"
+                                      </div>
+                                    ))}
+                                  </div>
+                                }
+                              >
+                                <Tag color="error" style={{ cursor: 'pointer' }}>Bị từ chối</Tag>
+                              </Tooltip>
+                            )}
+                          </Space>
+                        );
+                      },
+                    },
+                    {
                       title: 'Thao tác',
                       key: 'action',
-                      render: (_, record) => {
-                        if (record.attendance_status === 'INCOMPLETE') {
+                      render: (_, record: AttendanceRecord) => {
+                        const dayFixes = myFixes.filter((f) => f.work_date === record.work_date);
+                        const hasPending = dayFixes.some((f) => f.status === 'PENDING');
+                        const hasRejected = dayFixes.some((f) => f.status === 'REJECTED');
+
+                        if (record.attendance_status === 'INCOMPLETE' && !hasPending) {
                           return (
                             <Button size="small" type="link" onClick={() => openQuickFix(record)}>
-                              Giải trình bổ sung
+                              {hasRejected ? 'Giải trình lại' : 'Giải trình bổ sung'}
                             </Button>
                           );
                         }
@@ -325,12 +444,26 @@ export const AttendancePage: React.FC = () => {
                       key: 'status',
                       render: (st) => (
                         <Tag color={st === 'APPROVED' ? 'success' : st === 'REJECTED' ? 'error' : 'warning'}>
-                          {st}
+                          {st === 'APPROVED' ? 'ĐÃ DUYỆT' : st === 'REJECTED' ? 'TỪ CHỐI' : 'CHỜ DUYỆT'}
                         </Tag>
                       ),
                     },
                     {
-                      title: 'Ghi chú duyệt',
+                      title: 'Người duyệt',
+                      key: 'reviewer',
+                      render: (_, fix) => {
+                        if (fix.status === 'PENDING') return <span style={{ color: '#9ca3af' }}>Chờ duyệt</span>;
+                        return fix.reviewer?.full_name || employeesById[fix.reviewer_employee_id || 0]?.full_name || (fix.reviewer_employee_id ? `NV #${fix.reviewer_employee_id}` : '-');
+                      },
+                    },
+                    {
+                      title: 'Thời gian duyệt',
+                      dataIndex: 'reviewed_at',
+                      key: 'reviewed_at',
+                      render: (d) => (d ? dayjs(d).format('DD/MM/YYYY HH:mm') : '-'),
+                    },
+                    {
+                      title: 'Ghi chú phản hồi',
                       dataIndex: 'review_note',
                       key: 'review_note',
                       render: (note) => note || '-',
@@ -339,96 +472,171 @@ export const AttendancePage: React.FC = () => {
                 />
               ),
             },
-            ...(hasRole(['MANAGER', 'ADMIN'])
+            ...(hasRole(['MANAGER', 'HR', 'ADMIN'])
               ? [
                   {
                     key: 'approvals',
                     label: (
                       <span>
                         Duyệt giải trình
-                        {pendingFixes.length > 0 && (
+                        {pendingCount > 0 && (
                           <Tag color="orange" style={{ marginLeft: 6, borderRadius: 10 }}>
-                            {pendingFixes.length}
+                            {pendingCount}
                           </Tag>
                         )}
                       </span>
                     ),
                     children: (
-                      <Table
-                        dataSource={pendingFixes}
-                        rowKey="attendance_fix_id"
-                        loading={loading}
-                        columns={[
-                          {
-                            title: 'Mã NV',
-                            dataIndex: 'employee_id',
-                            key: 'employee_id',
-                            render: (id) => <Tag color="geekblue">NV#{id}</Tag>,
-                          },
-                          {
-                            title: 'Ngày',
-                            dataIndex: 'work_date',
-                            key: 'work_date',
-                            render: (d) => <b>{d}</b>,
-                          },
-                          {
-                            title: 'Sự kiện bổ sung',
-                            dataIndex: 'event_type',
-                            key: 'event_type',
-                            render: (t) => <Tag color={t === 'CHECK_IN' ? 'blue' : 'orange'}>{t}</Tag>,
-                          },
-                          {
-                            title: 'Giờ đề xuất',
-                            dataIndex: 'requested_at',
-                            key: 'requested_at',
-                            render: (t) => dayjs(t).format('HH:mm:ss'),
-                          },
-                          {
-                            title: 'Lý do nhân viên',
-                            dataIndex: 'reason',
-                            key: 'reason',
-                          },
-                          {
-                            title: 'Hành động',
-                            key: 'actions',
-                            render: (_, fix) => (
-                              <Space size="small">
-                                <Button
-                                  type="primary"
-                                  size="small"
-                                  icon={<CheckOutlined />}
-                                  onClick={() => {
-                                    setReviewingFix(fix);
-                                    setReviewAction('APPROVED');
-                                    setReviewNote('Đồng ý giải trình');
-                                    setReviewModalOpen(true);
-                                  }}
-                                  style={{ background: '#16a34a' }}
-                                >
-                                  Duyệt
-                                </Button>
-                                <Button
-                                  danger
-                                  size="small"
-                                  icon={<CloseOutlined />}
-                                  onClick={() => {
-                                    setReviewingFix(fix);
-                                    setReviewAction('REJECTED');
-                                    setReviewNote('Từ chối giải trình');
-                                    setReviewModalOpen(true);
-                                  }}
-                                >
-                                  Từ chối
-                                </Button>
-                              </Space>
-                            ),
-                          },
-                        ]}
-                      />
+                      <div>
+                        <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
+                          <Space>
+                            <Text strong>Bộ lọc trạng thái:</Text>
+                            <Radio.Group
+                              value={approvalFilter}
+                              onChange={(e) => {
+                                const newFilter = e.target.value;
+                                setApprovalFilter(newFilter);
+                                fetchApprovalFixes(newFilter);
+                              }}
+                              buttonStyle="solid"
+                            >
+                              <Radio.Button value="PENDING">
+                                Chờ duyệt {pendingCount > 0 && `(${pendingCount})`}
+                              </Radio.Button>
+                              <Radio.Button value="APPROVED">Đã duyệt (Lịch sử)</Radio.Button>
+                              <Radio.Button value="REJECTED">Đã từ chối</Radio.Button>
+                              <Radio.Button value="ALL">Tất cả</Radio.Button>
+                            </Radio.Group>
+                          </Space>
+                          <Text type="secondary" style={{ fontSize: 13 }}>
+                            {approvalFilter === 'PENDING'
+                              ? 'Danh sách yêu cầu giải trình cấp dưới cần duyệt'
+                              : 'Lịch sử giải trình đầy đủ để đối chiếu và tra cứu khi có khiếu nại'}
+                          </Text>
+                        </div>
+                        <Table
+                          dataSource={approvalFixes}
+                          rowKey="attendance_fix_id"
+                          loading={loading}
+                          columns={[
+                            {
+                              title: 'Nhân viên',
+                              key: 'employee',
+                              render: (_, fix) => (
+                                <div>
+                                  <b>{fix.employee?.full_name || employeesById[fix.employee_id]?.full_name || `NV #${fix.employee_id}`}</b>
+                                  <div style={{ fontSize: 12, color: '#6b7280' }}>
+                                    {fix.employee?.employee_code || `ID: ${fix.employee_id}`}
+                                  </div>
+                                </div>
+                              ),
+                            },
+                            {
+                              title: 'Ngày làm việc',
+                              dataIndex: 'work_date',
+                              key: 'work_date',
+                              render: (d) => <b>{d}</b>,
+                            },
+                            {
+                              title: 'Sự kiện bổ sung',
+                              dataIndex: 'event_type',
+                              key: 'event_type',
+                              render: (t) => <Tag color={t === 'CHECK_IN' ? 'blue' : 'orange'}>{t}</Tag>,
+                            },
+                            {
+                              title: 'Giờ đề xuất',
+                              dataIndex: 'requested_at',
+                              key: 'requested_at',
+                              render: (t) => dayjs(t).format('HH:mm:ss'),
+                            },
+                            {
+                              title: 'Lý do nhân viên',
+                              dataIndex: 'reason',
+                              key: 'reason',
+                            },
+                            {
+                              title: 'Trạng thái',
+                              dataIndex: 'status',
+                              key: 'status',
+                              render: (st) => (
+                                <Tag color={st === 'APPROVED' ? 'success' : st === 'REJECTED' ? 'error' : 'warning'}>
+                                  {st === 'APPROVED' ? 'ĐÃ DUYỆT' : st === 'REJECTED' ? 'TỪ CHỐI' : 'CHỜ DUYỆT'}
+                                </Tag>
+                              ),
+                            },
+                            {
+                              title: 'Thông tin duyệt',
+                              key: 'reviewer_info',
+                              render: (_, fix) => {
+                                if (fix.status === 'PENDING') {
+                                  return <span style={{ color: '#9ca3af' }}>Chưa duyệt</span>;
+                                }
+                                const reviewerName = fix.reviewer?.full_name || employeesById[fix.reviewer_employee_id || 0]?.full_name || `Quản lý #${fix.reviewer_employee_id || ''}`;
+                                return (
+                                  <div>
+                                    <div style={{ fontSize: 13, fontWeight: 500 }}>{reviewerName}</div>
+                                    {fix.reviewed_at && (
+                                      <div style={{ fontSize: 12, color: '#6b7280' }}>
+                                        {dayjs(fix.reviewed_at).format('DD/MM/YYYY HH:mm')}
+                                      </div>
+                                    )}
+                                    {fix.review_note && (
+                                      <div style={{ fontSize: 12, color: '#4b5563', fontStyle: 'italic', marginTop: 2 }}>
+                                        "{fix.review_note}"
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              },
+                            },
+                            {
+                              title: 'Hành động',
+                              key: 'actions',
+                              render: (_, fix) => {
+                                if (fix.status === 'PENDING') {
+                                  return (
+                                    <Space size="small">
+                                      <Button
+                                        type="primary"
+                                        size="small"
+                                        icon={<CheckOutlined />}
+                                        onClick={() => {
+                                          setReviewingFix(fix);
+                                          setReviewAction('APPROVED');
+                                          setReviewNote('Đồng ý giải trình');
+                                          setReviewModalOpen(true);
+                                        }}
+                                        style={{ background: '#16a34a' }}
+                                      >
+                                        Duyệt
+                                      </Button>
+                                      <Button
+                                        danger
+                                        size="small"
+                                        icon={<CloseOutlined />}
+                                        onClick={() => {
+                                          setReviewingFix(fix);
+                                          setReviewAction('REJECTED');
+                                          setReviewNote('Từ chối giải trình');
+                                          setReviewModalOpen(true);
+                                        }}
+                                      >
+                                        Từ chối
+                                      </Button>
+                                    </Space>
+                                  );
+                                }
+                                return <Tag color="default">Đã xử lý</Tag>;
+                              },
+                            },
+                          ]}
+                        />
+                      </div>
                     ),
                   },
                 ]
               : []),
+
           ]}
         />
       </Card>
@@ -438,6 +646,7 @@ export const AttendancePage: React.FC = () => {
         open={fixModalOpen}
         onCancel={() => setFixModalOpen(false)}
         title="Lập đơn giải trình bổ sung chấm công"
+        forceRender
         footer={null}
         width={520}
       >
