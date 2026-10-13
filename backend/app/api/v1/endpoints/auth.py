@@ -78,6 +78,13 @@ async def login_with_google(login_data: GoogleLoginRequest, db: AsyncSession = D
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+    ALLOWED_DOMAIN = "fsb.edu.vn"
+    if not email or not email.endswith(f"@{ALLOWED_DOMAIN}"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Chỉ tài khoản Google có đuôi @{ALLOWED_DOMAIN} mới được phép đăng nhập."
+        )
+
     stmt = (
         select(UserAccount)
         .where(UserAccount.login_email == email)
