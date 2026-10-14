@@ -16,6 +16,7 @@ from app.models.attendance import AttendanceDay, AttendanceFix
 from app.models.leave import LeaveRequest, EmployeeLeaveBalance
 from app.models.payroll import PayrollPeriod, PayrollLine
 from app.services.ai_access import report_scope, user_roles, require_reviewer_role
+from app.core.authorization import require_capability
 
 MAX_REPORT_ROWS = 10000
 
@@ -281,9 +282,12 @@ class ReportService:
     async def visible_employee_ids(
         db, user, kind: str, scope: str | None, department_id: int | None,
         start: date | None = None, end: date | None = None,
+        employee_id: int | None = None,
     ) -> tuple[str, list[int]]:
         roles = user_roles(user)
         require_reviewer_role(roles)
+        if employee_id is not None and kind not in {"ATTENDANCE", "LEAVE", "ATTENDANCE_FIX"}:
+            raise HTTPException(422, "REPORT_EMPLOYEE_FILTER_UNSUPPORTED")
         if kind == "MY_PAYSLIP":
             if scope not in {None, "SELF"} or department_id is not None:
                 raise HTTPException(status_code=403, detail="AI_ACCESS_DENIED")
@@ -306,19 +310,25 @@ class ReportService:
                 statement = statement.where(Employee.department_id == department_id)
             ids = list((await db.scalars(statement.order_by(PayrollLine.employee_id).limit(MAX_REPORT_ROWS + 1))).all())
             return "COMPANY", check_report_size(ids)
-        if kind in {"HEADCOUNT", "APPROVAL_QUEUE"} and not roles & {"MANAGER", "HR", "ADMIN"}:
+        if kind == "HEADCOUNT":
+            require_capability(roles, "report.headcount")
+        if kind == "APPROVAL_QUEUE" and not roles & {"MANAGER", "HR", "ADMIN"}:
             raise HTTPException(status_code=403, detail="AI_ACCESS_DENIED")
         if kind == "APPROVAL_QUEUE" and scope not in {None, "DIRECT_REPORTS"}:
             raise HTTPException(403, "AI_ACCESS_DENIED")
         requested = "DIRECT_REPORTS" if kind == "APPROVAL_QUEUE" else scope
         resolved_scope = report_scope(user, requested)
         stmt = select(Employee.employee_id)
+        if employee_id is not None:
+            stmt = stmt.where(Employee.employee_id == employee_id)
         scope_filter = employee_scope(user, resolved_scope)
         if scope_filter is not None:
             stmt = stmt.where(scope_filter)
         if department_id is not None:
             stmt = stmt.where(Employee.department_id == department_id)
         ids = list((await db.scalars(stmt.order_by(Employee.employee_id).limit(MAX_REPORT_ROWS + 1))).all())
+        if employee_id is not None and not ids:
+            raise HTTPException(404, "REPORT_UNAVAILABLE")
         return resolved_scope, check_report_size(ids)
 
     @staticmethod
@@ -407,8 +417,8 @@ class ReportService:
                 "kind": kind, "scope": resolved_scope, "start_date": start, "end_date": end,
                 "rows": rows, "note": note,
             }
-        if kind == "HEADCOUNT" and not roles & {"MANAGER", "HR", "ADMIN"}:
-            raise HTTPException(status_code=403, detail="AI_ACCESS_DENIED")
+        if kind == "HEADCOUNT":
+            require_capability(roles, "report.headcount")
         if kind == "APPROVAL_QUEUE" and not roles & {"MANAGER", "HR", "ADMIN"}:
             raise HTTPException(status_code=403, detail="AI_ACCESS_DENIED")
         if kind == "APPROVAL_QUEUE" and scope not in {None, "DIRECT_REPORTS"}:
@@ -484,6 +494,11 @@ class ReportService:
             rows = sorted(leave_rows + fix_rows, key=lambda row: (row["request_date"], row["created_at"], row["request_type"]))
             stmt = None
         elif kind == "HEADCOUNT":
+            # Aggregated rows have no employee_id to audit after the query.
+            # Intersect with the pre-authorized snapshot BEFORE grouping.
+            if source_employee_ids is not None:
+                frozen_filter = Employee.employee_id.in_(source_employee_ids)
+                scope_filter = and_(scope_filter, frozen_filter) if scope_filter is not None else frozen_filter
             stmt = select(
                 Employee.department_id, Department.department_name, Employee.employment_status,
                 func.count(Employee.employee_id).label("employee_count"),

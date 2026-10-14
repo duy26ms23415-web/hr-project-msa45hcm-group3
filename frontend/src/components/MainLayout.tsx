@@ -11,6 +11,7 @@ import {
   UserOutlined,
   RobotOutlined,
   ThunderboltOutlined,
+  SafetyCertificateOutlined,
 } from '@ant-design/icons';
 import { useNavigate, useLocation, Outlet } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
@@ -73,6 +74,7 @@ export const MainLayout: React.FC = () => {
             ]
           : []),
         ...(hasRole(['ADMIN', 'HR']) ? [{ key: '/knowledge', icon: <RobotOutlined />, label: 'Tài liệu & chính sách' }] : []),
+        ...(hasRole(['ADMIN']) ? [{ key: '/ai-access', icon: <SafetyCertificateOutlined />, label: 'Quyền truy cập AI' }] : []),
         ...(hasRole(['ADMIN', 'HR', 'MANAGER'])
           ? [
               {
@@ -186,7 +188,7 @@ export const MainLayout: React.FC = () => {
         />
 
         {/* AI Quick helper promo inside sider */}
-        {!collapsed && (
+        {!collapsed && !isKioskOnly && (
           <div
             style={{
               margin: '24px 16px',
@@ -246,7 +248,7 @@ export const MainLayout: React.FC = () => {
 
           {/* Right Header items */}
           <Space orientation="horizontal" size="middle">
-            <Button
+            {!isKioskOnly && <Button
               type="default"
               icon={<RobotOutlined style={{ color: '#1677ff' }} />}
               onClick={() => setAiModalOpen(true)}
@@ -259,7 +261,7 @@ export const MainLayout: React.FC = () => {
               }}
             >
               Hỏi AI Assistant
-            </Button>
+            </Button>}
 
             <Dropdown menu={userMenu} placement="bottomRight" arrow>
               <div
@@ -298,7 +300,7 @@ export const MainLayout: React.FC = () => {
       </Layout>
 
       {/* Keep the table toolbar clear; the header still opens the assistant. */}
-      {!aiModalOpen && !location.pathname.startsWith("/reports") && <div
+      {!isKioskOnly && !aiModalOpen && !location.pathname.startsWith("/reports") && <div
         style={{
           position: 'fixed',
           bottom: 28,
@@ -323,7 +325,7 @@ export const MainLayout: React.FC = () => {
         />
       </div>}
 
-      <AIChatModal key={user?.user_account_id ?? 'anonymous'} open={aiModalOpen} onClose={() => setAiModalOpen(false)} />
+      {!isKioskOnly && <AIChatModal key={user?.user_account_id ?? 'anonymous'} open={aiModalOpen} onClose={() => setAiModalOpen(false)} />}
     </Layout>
   );
 };

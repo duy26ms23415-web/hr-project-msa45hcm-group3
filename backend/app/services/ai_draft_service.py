@@ -1,7 +1,8 @@
 """Owner-scoped persistence for multi-turn AI action drafts."""
 
 from datetime import date, datetime, time, timedelta, timezone
-from uuid import uuid4
+from uuid import uuid4, uuid5, NAMESPACE_URL
+from app.services.ai_request_security import current_request_id
 
 from fastapi import HTTPException
 from sqlalchemy import select
@@ -14,7 +15,7 @@ DRAFT_TTL = timedelta(minutes=15)
 COMMAND_FIELDS = {
     "DRAFT_LEAVE": frozenset({"leave_date", "session", "leave_type_id", "reason"}),
     "DRAFT_FIX": frozenset({"work_date", "event_type", "reason", "requested_time"}),
-    "DRAFT_REPORT": frozenset({"kind", "start_date", "end_date", "scope", "department_id"}),
+    "DRAFT_REPORT": frozenset({"kind", "start_date", "end_date", "scope", "department_id", "employee_id"}),
 }
 REQUIRED_FIELDS = {**COMMAND_FIELDS, "DRAFT_REPORT": frozenset({"kind", "start_date", "end_date", "scope"})}
 
@@ -34,7 +35,7 @@ class AIDraftService:
             raise HTTPException(status_code=422, detail="AI_DRAFT_FIELD_INVALID")
         try:
             for key, value in params.items():
-                if key in {"leave_type_id", "department_id"}:
+                if key in {"leave_type_id", "department_id", "employee_id"}:
                     if type(value) is not int or value <= 0:
                         raise ValueError()
                 elif not isinstance(value, str):
@@ -81,8 +82,24 @@ class AIDraftService:
         missing_fields = [] if missing_fields is None else missing_fields
         AIDraftService._validate_missing_fields(command, missing_fields)
         now = utc_now()
+        operation_id = current_request_id()
+        draft_id = (str(uuid5(NAMESPACE_URL, f"hr-ai-draft:{owner_user_account_id}:{operation_id}:{command}"))
+                    if operation_id else str(uuid4()))
+        if operation_id:
+            existing = (await db.execute(select(AIChatDraft).where(
+                AIChatDraft.draft_id == draft_id,
+                AIChatDraft.owner_user_account_id == owner_user_account_id,
+            ).with_for_update())).scalar_one_or_none()
+            if existing is not None:
+                await AIDraftService._ensure_unexpired(db, existing)
+                if existing.status not in {"COLLECTING", "READY"}:
+                    raise HTTPException(409, "AI_DRAFT_NOT_COLLECTING")
+                if (existing.command != command or existing.typed_params != typed_params
+                        or existing.missing_fields != missing_fields):
+                    raise HTTPException(409, "AI_DRAFT_IDEMPOTENCY_CONFLICT")
+                return existing
         draft = AIChatDraft(
-            draft_id=str(uuid4()),
+            draft_id=draft_id,
             owner_user_account_id=owner_user_account_id,
             command=command,
             typed_params=dict(typed_params),

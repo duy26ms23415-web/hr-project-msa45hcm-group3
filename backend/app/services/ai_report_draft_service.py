@@ -1,6 +1,8 @@
 """Owner-bound report tools; Python parses common filters, Gemini supplies typed hints."""
 from sqlalchemy import select
 from datetime import datetime, timezone
+from uuid import uuid5, NAMESPACE_URL
+from app.services.report_access import authorized_run
 from app.models.knowledge import ReportRun
 
 from fastapi import HTTPException
@@ -45,6 +47,14 @@ async def interpret_report_prompt(message, today, user, current=None):
     return await _REPORT_INTERPRETER.interpret(message, today, user, current)
 
 
+def revised_report_params(current, answers):
+    """A stated scope replaces a selected employee, even if scope is unchanged."""
+    params = {**current, **answers}
+    if "employee_id" not in answers and ("scope" in answers or params.get("kind") not in {"ATTENDANCE", "LEAVE", "ATTENDANCE_FIX"}):
+        params.pop("employee_id", None)
+    return params
+
+
 class AIReportDraftService:
     @staticmethod
     def validate_access(user, params):
@@ -73,21 +83,31 @@ class AIReportDraftService:
         AIReportDraftService.validate_access(user, params)
         missing = [key for key in REQUIRED if key not in params]
         draft = await AIDraftService.create_draft(db, user.user_account_id, "DRAFT_REPORT", params, missing)
+        if draft.status == "READY":
+            # Initial POST replay after an acknowledged or lost response:
+            # reuse the exact persisted run without creating a second one.
+            run_id = uuid5(NAMESPACE_URL, f"hr-ai-report-draft:{draft.draft_id}").hex
+            run = await authorized_run(db, user, run_id)
+            req = ReportRunCreate.model_validate(draft.typed_params)
+            return AIReportDraftService.completed_response(draft, req, run)
         return await AIReportDraftService.finish_or_ask(db, user, draft)
 
     @staticmethod
     async def continue_draft(db, user, draft, message, today, inputs=None):
+        if draft.status != "COLLECTING":
+            raise HTTPException(409, "AI_DRAFT_NOT_COLLECTING")
         AIReportDraftService.validate_access(user, {})
         answers = {**await interpret_report_prompt(message, today, user, draft.typed_params),
                    **report_answers(message, today, draft.typed_params, draft.missing_fields)}
         if inputs:
             AIDraftService._validate_command_and_params("DRAFT_REPORT", inputs)
             answers.update(inputs)
-        params = {**draft.typed_params, **answers}
+        params = revised_report_params(draft.typed_params, answers)
         AIDraftService._validate_command_and_params("DRAFT_REPORT", params)
         AIReportDraftService.validate_access(user, params)
         missing = [key for key in REQUIRED if key not in params]
-        draft = await AIDraftService.update_draft(db, draft.draft_id, user.user_account_id, params, missing)
+        if answers or missing != draft.missing_fields:
+            draft = await AIDraftService.update_draft(db, draft.draft_id, user.user_account_id, params, missing)
         return await AIReportDraftService.finish_or_ask(db, user, draft)
 
     @staticmethod
@@ -109,10 +129,16 @@ class AIReportDraftService:
         if not answers:
             return AIChatResponse(reply="Bạn muốn đổi kỳ, loại báo cáo hay phạm vi? Ví dụ: đổi sang tháng trước.",
                                   message_code="REPORT_CHANGE_REQUIRED")
-        return await AIReportDraftService.start(db, user, "", today, {**current, **answers})
+        params = revised_report_params(current, answers)
+        AIReportDraftService.validate_access(user, params)
+        return await AIReportDraftService.start(db, user, "", today, params)
 
     @staticmethod
     async def finish_or_ask(db, user, draft):
+        # Reject a completed draft before ReportRunService can commit a new
+        # snapshot in its independent storage transaction.
+        if draft.status != "COLLECTING":
+            raise HTTPException(409, "AI_DRAFT_NOT_COLLECTING")
         AIReportDraftService.validate_access(user, draft.typed_params)
         if draft.missing_fields:
             field = draft.missing_fields[0]
@@ -129,7 +155,13 @@ class AIReportDraftService:
             req = ReportRunCreate.model_validate(draft.typed_params)
         except ValidationError as exc:
             raise HTTPException(422, "INVALID_INPUT") from exc
-        result = await ReportRunService.create(db, user, req)
+        result = await ReportRunService.create(db, user, req, source_draft_id=draft.draft_id)
         await AIDraftService.mark_ready(db, draft.draft_id, user.user_account_id)
+        return AIReportDraftService.completed_response(draft, req, result["run"])
+
+    @staticmethod
+    def completed_response(draft, req, run):
         scope_label = {"SELF": "bản thân", "DIRECT_REPORTS": "nhân viên trực tiếp", "COMPANY": "toàn công ty"}[req.scope]
-        return AIChatResponse(reply=f"Đã tạo báo cáo từ {req.start_date:%d/%m/%Y} đến {req.end_date:%d/%m/%Y}, phạm vi {scope_label}. Bạn có thể xem trước và tải Excel.", action=AIChatAction(action_type="OPEN_REPORT", data={"path": "/reports", **draft.typed_params, "run_id": result["run"].run_id}))
+        if req.employee_id is not None:
+            scope_label = "nhân viên đã chọn"
+        return AIChatResponse(reply=f"Đã tạo báo cáo từ {req.start_date:%d/%m/%Y} đến {req.end_date:%d/%m/%Y}, phạm vi {scope_label}. Bạn có thể xem trước và tải Excel.", action=AIChatAction(action_type="OPEN_REPORT", data={"path": "/reports", **draft.typed_params, "run_id": run.run_id}))
