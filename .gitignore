@@ -65,3 +65,5 @@ backend/storage/
 .pytest-ai-validation-*/
 .coverage
 htmlcov/
+google_credentials.json
+scripts/

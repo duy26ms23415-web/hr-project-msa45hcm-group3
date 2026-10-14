@@ -42,20 +42,28 @@ const ProtectedRoute: React.FC<{ children: React.ReactNode; requiredRoles?: stri
   }
 
   if (requiredRoles && !hasRole(requiredRoles)) {
-    return <Navigate to="/dashboard" replace />;
+    const isKioskOnly = hasRole(['KIOSK']) && !hasRole(['ADMIN', 'HR', 'MANAGER', 'EMPLOYEE']);
+    return <Navigate to={isKioskOnly ? "/kiosk" : "/dashboard"} replace />;
   }
 
   return <>{children}</>;
 };
 
 function AppRoutes() {
-  const { user } = useAuth();
+  const { user, hasRole } = useAuth();
+  const isKioskOnly = !!user && hasRole(['KIOSK']) && !hasRole(['ADMIN', 'HR', 'MANAGER', 'EMPLOYEE']);
 
   return (
     <Routes>
       <Route
         path="/login"
-        element={user ? <Navigate to="/dashboard" replace /> : <LoginPage />}
+        element={
+          user ? (
+            <Navigate to={isKioskOnly ? "/kiosk" : "/dashboard"} replace />
+          ) : (
+            <LoginPage />
+          )
+        }
       />
 
       <Route
@@ -66,12 +74,31 @@ function AppRoutes() {
           </ProtectedRoute>
         }
       >
-        <Route index element={<Navigate to="/dashboard" replace />} />
-        <Route path="dashboard" element={<DashboardPage />} />
-        <Route path="attendance" element={<AttendancePage />} />
-        <Route path="leaves" element={<LeavePage />} />
-        <Route path="payroll" element={<PayrollPage />} />
-        <Route path="kiosk" element={<KioskScanPage />} />
+        <Route index element={<Navigate to={isKioskOnly ? "/kiosk" : "/dashboard"} replace />} />
+        <Route
+          path="dashboard"
+          element={isKioskOnly ? <Navigate to="/kiosk" replace /> : <DashboardPage />}
+        />
+        <Route
+          path="attendance"
+          element={isKioskOnly ? <Navigate to="/kiosk" replace /> : <AttendancePage />}
+        />
+        <Route
+          path="leaves"
+          element={isKioskOnly ? <Navigate to="/kiosk" replace /> : <LeavePage />}
+        />
+        <Route
+          path="payroll"
+          element={isKioskOnly ? <Navigate to="/kiosk" replace /> : <PayrollPage />}
+        />
+        <Route
+          path="kiosk"
+          element={
+            <ProtectedRoute requiredRoles={['KIOSK', 'ADMIN']}>
+              <KioskScanPage />
+            </ProtectedRoute>
+          }
+        />
         <Route path="reports" element={<ProtectedRoute requiredRoles={['MANAGER', 'HR', 'ADMIN']}><Navigate to="/dashboard" state={{ openAI: true }} replace /></ProtectedRoute>} />
         <Route path="knowledge/view/:documentId" element={<Suspense fallback={<Spin />}><KnowledgeViewerPage /></Suspense>} />
         <Route path="knowledge" element={<ProtectedRoute requiredRoles={['ADMIN', 'HR']}><Suspense fallback={<Spin />}><KnowledgePage /></Suspense></ProtectedRoute>} />
@@ -85,7 +112,7 @@ function AppRoutes() {
         />
       </Route>
 
-      <Route path="*" element={<Navigate to="/dashboard" replace />} />
+      <Route path="*" element={<Navigate to={isKioskOnly ? "/kiosk" : "/dashboard"} replace />} />
     </Routes>
   );
 }

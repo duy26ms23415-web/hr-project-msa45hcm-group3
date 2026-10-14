@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Card, Form, Input, Button, Alert, Typography, Divider, Space, Tag } from 'antd';
-import { UserOutlined, LockOutlined, ThunderboltOutlined, SafetyCertificateOutlined } from '@ant-design/icons';
+import { UserOutlined, LockOutlined, ThunderboltOutlined, SafetyCertificateOutlined, QrcodeOutlined } from '@ant-design/icons';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { SESSION_EXPIRED_MESSAGE } from '../types/ai';
 import { useAuth } from '../context/AuthContext';
@@ -21,7 +21,11 @@ export const LoginPage: React.FC = () => {
     setErrorMsg(null);
     try {
       await login(values.email, values.pass);
-      navigate('/dashboard');
+      if (values.email.toLowerCase().includes('kiosk')) {
+        navigate('/kiosk');
+      } else {
+        navigate('/dashboard');
+      }
     } catch (err: any) {
       setErrorMsg(err.response?.data?.detail || 'Đăng nhập không thành công. Vui lòng kiểm tra lại thông tin!');
     } finally {
@@ -35,7 +39,11 @@ export const LoginPage: React.FC = () => {
     setErrorMsg(null);
     try {
       await login(email, 'Password@123');
-      navigate('/dashboard');
+      if (email.toLowerCase().includes('kiosk')) {
+        navigate('/kiosk');
+      } else {
+        navigate('/dashboard');
+      }
     } catch (err: any) {
       setErrorMsg(err.response?.data?.detail || 'Lỗi đăng nhập nhanh!');
     } finally {
@@ -219,6 +227,17 @@ export const LoginPage: React.FC = () => {
           >
             <span style={{ fontWeight: 600, flex: 1 }}>Nhân viên (Employee)</span>
             <Tag color="blue" style={{ margin: 0 }}>employee@hrgroup3.com</Tag>
+          </Button>
+
+          <Button
+            block
+            icon={<QrcodeOutlined style={{ color: '#0891b2' }} />}
+            onClick={() => handleQuickLogin('kiosk@hrgroup3.com')}
+            disabled={loading}
+            style={{ borderRadius: 8, textAlign: 'left', display: 'flex', alignItems: 'center' }}
+          >
+            <span style={{ fontWeight: 600, flex: 1 }}>Máy chấm công (Kiosk)</span>
+            <Tag color="cyan" style={{ margin: 0 }}>kiosk@hrgroup3.com</Tag>
           </Button>
         </Space>
 

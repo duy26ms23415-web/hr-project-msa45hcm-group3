@@ -51,6 +51,7 @@ export const EmployeesPage: React.FC = () => {
   const [addModalOpen, setAddModalOpen] = useState(false);
   const [form] = Form.useForm();
   const [submitting, setSubmitting] = useState(false);
+  const submittingCreateRef = useRef(false);
 
   const [editingEmployee, setEditingEmployee] = useState<Employee | null>(null);
   const [editForm] = Form.useForm();
@@ -77,11 +78,12 @@ export const EmployeesPage: React.FC = () => {
         ...(editingDemo ? {} : {
           email: values.email,
           employment_status: values.employment_status,
+          ...(values.role_code ? { role_code: values.role_code } : {}),
           ...(values.new_password ? { new_password: values.new_password } : {}),
         }),
       };
       await api.patch(`/employees/${editingEmployee.employee_id}`, payload);
-      message.success(!editingEmployee.has_login_account && values.new_password ? 'Đã cập nhật hồ sơ và tạo tài khoản đăng nhập với quyền Nhân viên.' : 'Đã cập nhật thông tin nhân viên.');
+      message.success(!editingEmployee.has_login_account && values.new_password ? 'Đã cập nhật hồ sơ và tạo tài khoản đăng nhập.' : 'Đã cập nhật thông tin nhân viên.');
       setEditingEmployee(null);
       editForm.resetFields();
       fetchEmployees();
@@ -172,13 +174,16 @@ export const EmployeesPage: React.FC = () => {
   }, [isAdminOrHR]);
 
   const handleCreateEmployee = async (values: any) => {
+    if (submittingCreateRef.current) return;
+    submittingCreateRef.current = true;
     setSubmitting(true);
     try {
       const payload = {
-        employee_code: values.employee_code,
-        full_name: values.full_name,
-        email: values.email,
-        phone_number: values.phone_number,
+        employee_code: values.employee_code.trim(),
+        full_name: values.full_name.trim(),
+        email: values.email.trim(),
+        phone_number: values.phone_number?.trim() || undefined,
+        role_code: values.role_code || 'EMPLOYEE',
         login_password: values.login_password,
         department_id: values.department_id,
         position_id: values.position_id,
@@ -189,19 +194,22 @@ export const EmployeesPage: React.FC = () => {
 
       const res = await api.post('/employees', payload);
 
-      // Auto-issue QR card for new employee
-      await api.post(`/attendance/employees/${res.data.employee_id}/qr-cards`, {
+      // Đóng modal và reset form ngay lập tức khi tạo thành công
+      setAddModalOpen(false);
+      form.resetFields();
+      message.success('Đã thêm nhân viên và cấp tài khoản đăng nhập bằng email công ty.');
+      fetchEmployees();
+
+      // Cấp mã QR tĩnh chạy ngầm trong background (không chặn modal)
+      api.post(`/attendance/employees/${res.data.employee_id}/qr-cards`, {
         qr_code_value: `${res.data.employee_code}_QR_STATIC`,
       }).catch(() => null);
 
-      message.success('Đã thêm nhân viên và cấp tài khoản đăng nhập bằng email công ty.');
-      setAddModalOpen(false);
-      form.resetFields();
-      fetchEmployees();
     } catch (err: any) {
       const detail = err.response?.data?.detail;
       message.error(typeof detail === 'string' ? detail : 'Lỗi khi thêm nhân viên. Vui lòng kiểm tra thông tin.');
     } finally {
+      submittingCreateRef.current = false;
       setSubmitting(false);
     }
   };
@@ -277,10 +285,25 @@ export const EmployeesPage: React.FC = () => {
             icon={<UserAddOutlined />}
             onClick={() => {
               form.resetFields();
+              let nextCode = 'EMP010';
+              if (employees && employees.length > 0) {
+                const nums = employees
+                  .map((e) => {
+                    const m = e.employee_code?.match(/^EMP(\d+)$/i);
+                    return m ? parseInt(m[1], 10) : 0;
+                  })
+                  .filter((n) => !isNaN(n) && n > 0);
+                if (nums.length > 0) {
+                  const maxNum = Math.max(...nums);
+                  nextCode = `EMP${String(maxNum + 1).padStart(3, '0')}`;
+                }
+              }
               form.setFieldsValue({
+                employee_code: nextCode,
                 hire_date: dayjs(),
                 department_id: departments[0]?.department_id,
                 position_id: positions[0]?.position_id,
+                role_code: 'EMPLOYEE',
               });
               setAddModalOpen(true);
             }}
@@ -323,6 +346,7 @@ export const EmployeesPage: React.FC = () => {
                   editForm.setFieldsValue({
                     ...record,
                     hire_date: dayjs(record.hire_date),
+                    role_code: record.roles?.[0] || 'EMPLOYEE',
                     new_password: undefined,
                     confirm_password: undefined,
                   });
@@ -354,6 +378,31 @@ export const EmployeesPage: React.FC = () => {
               title: 'Email',
               dataIndex: 'email',
               key: 'email',
+            },
+            {
+              title: 'Vai trò (Role)',
+              key: 'roles',
+              render: (_: unknown, record: Employee) => {
+                const roleList = record.roles && record.roles.length > 0 ? record.roles : ['EMPLOYEE'];
+                return (
+                  <Space wrap size={4}>
+                    {roleList.map((r) => {
+                      const colorMap: Record<string, string> = {
+                        ADMIN: 'red',
+                        HR: 'purple',
+                        MANAGER: 'orange',
+                        EMPLOYEE: 'blue',
+                        KIOSK: 'cyan',
+                      };
+                      return (
+                        <Tag key={r} color={colorMap[r] || 'default'} style={{ fontWeight: 600 }}>
+                          {r}
+                        </Tag>
+                      );
+                    })}
+                  </Space>
+                );
+              },
             },
             {
               title: 'Số điện thoại',
@@ -462,6 +511,21 @@ export const EmployeesPage: React.FC = () => {
                 { value: 'TERMINATED', label: 'Đã nghỉ việc' },
               ]} />
             </Form.Item>
+            {!editingDemo && (
+              <Form.Item
+                name="role_code"
+                label="Vai trò (Role)"
+                extra="Thay đổi vai trò cho tài khoản: MANAGER (18 ngày phép/năm), EMPLOYEE (12 ngày phép/năm), HR, ADMIN."
+              >
+                <Select options={[
+                  { value: 'EMPLOYEE', label: 'EMPLOYEE - Nhân viên (12 ngày phép/năm)' },
+                  { value: 'MANAGER', label: 'MANAGER - Quản lý trực tiếp (18 ngày phép/năm)' },
+                  { value: 'HR', label: 'HR - Nhân sự' },
+                  { value: 'ADMIN', label: 'ADMIN - Quản trị hệ thống' },
+                  { value: 'KIOSK', label: 'KIOSK - Thiết bị máy chấm công (chỉ mở Kiosk scan)' },
+                ]} />
+              </Form.Item>
+            )}
             {!editingDemo && <>
               <Form.Item name="new_password" label="Mật khẩu mới (tùy chọn)" extra={editingEmployee?.has_login_account ? "Để trống để giữ nguyên mật khẩu hiện tại." : "Nhập mật khẩu để tạo tài khoản đăng nhập bằng email ở trên."} rules={[
                 { min: 8, message: 'Mật khẩu cần ít nhất 8 ký tự.' },
@@ -497,7 +561,7 @@ export const EmployeesPage: React.FC = () => {
             label="Mã nhân viên"
             rules={[{ required: true, message: 'Vui lòng nhập mã NV!' }]}
           >
-            <Input placeholder="Ví dụ: EMP004" />
+            <Input placeholder="Ví dụ: EMP010 hoặc mã tùy chọn" />
           </Form.Item>
 
           <Form.Item
@@ -517,9 +581,35 @@ export const EmployeesPage: React.FC = () => {
           </Form.Item>
 
           <Form.Item
+            name="role_code"
+            label="Vai trò (Role)"
+            rules={[{ required: true, message: 'Vui lòng chọn vai trò!' }]}
+            initialValue="EMPLOYEE"
+            extra="Quyền hạn: KIOSK (Chỉ dùng cho máy chấm công quét mã QR), ADMIN (Quản trị hệ thống), HR (Nhân sự & Bảng lương), MANAGER (Quản lý - 18 ngày phép/năm), EMPLOYEE (Nhân viên - 12 ngày phép/năm)."
+          >
+            <Select>
+              <Select.Option value="EMPLOYEE">
+                <Tag color="blue">EMPLOYEE</Tag> Nhân viên (12 ngày phép/năm)
+              </Select.Option>
+              <Select.Option value="MANAGER">
+                <Tag color="orange">MANAGER</Tag> Quản lý trực tiếp (18 ngày phép/năm)
+              </Select.Option>
+              <Select.Option value="HR">
+                <Tag color="purple">HR</Tag> Nhân sự
+              </Select.Option>
+              <Select.Option value="ADMIN">
+                <Tag color="red">ADMIN</Tag> Quản trị hệ thống
+              </Select.Option>
+              <Select.Option value="KIOSK">
+                <Tag color="cyan">KIOSK</Tag> Thiết bị máy chấm công Kiosk
+              </Select.Option>
+            </Select>
+          </Form.Item>
+
+          <Form.Item
             name="login_password"
             label="Mật khẩu đăng nhập portal"
-            extra="Nhân viên dùng email công ty ở trên và mật khẩu này để đăng nhập với quyền Nhân viên."
+            extra="Nhân viên dùng email công ty ở trên và mật khẩu này để đăng nhập vào portal theo vai trò được gán."
             rules={[
               { required: true, message: 'Vui lòng nhập mật khẩu!' },
               { min: 8, message: 'Mật khẩu cần ít nhất 8 ký tự.' },

@@ -29,7 +29,7 @@ async def list_employees(
     stmt = select(Employee).options(
         selectinload(Employee.department),
         selectinload(Employee.position),
-        selectinload(Employee.user_account),
+        selectinload(Employee.user_account).selectinload(UserAccount.role_assignments).selectinload(UserRoleAssignment.role),
         selectinload(Employee.manager)
     )
     user_roles = {assignment.role.role_code for assignment in current_user.role_assignments}
@@ -54,14 +54,20 @@ async def create_employee(
 ):
     """Create a new employee profile"""
     # 1. Check duplicate code or email
-    stmt_check = select(Employee).where(
-        (Employee.employee_code == emp_in.employee_code) | (Employee.email == emp_in.email)
-    )
-    existing = (await db.execute(stmt_check)).scalar_one_or_none()
-    if existing:
+    stmt_check_code = select(Employee).where(Employee.employee_code == emp_in.employee_code)
+    existing_code = (await db.execute(stmt_check_code)).scalar_one_or_none()
+    if existing_code:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Mã nhân viên hoặc email đã tồn tại trong hệ thống"
+            detail=f"Mã nhân viên '{emp_in.employee_code}' đã tồn tại trong hệ thống"
+        )
+
+    stmt_check_email = select(Employee).where(Employee.email == emp_in.email)
+    existing_email = (await db.execute(stmt_check_email)).scalar_one_or_none()
+    if existing_email:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Email '{emp_in.email}' đã tồn tại trong hệ thống"
         )
 
     # 2. Validate department exists
@@ -95,24 +101,28 @@ async def create_employee(
                 detail=f"Người quản lý với ID {emp_in.manager_employee_id} không tồn tại"
             )
 
-    employee_role = None
+    target_role_code = (emp_in.role_code or "EMPLOYEE").upper()
+    role_obj = (await db.execute(
+        select(Role).where(Role.role_code == target_role_code)
+    )).scalar_one_or_none()
+    if not role_obj:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Chưa có quyền {target_role_code}. Vui lòng khởi tạo dữ liệu mẫu."
+        )
+
     if emp_in.login_password is not None:
         account = (await db.execute(
             select(UserAccount).where(UserAccount.login_email == emp_in.email)
         )).scalar_one_or_none()
         if account:
             raise HTTPException(status_code=409, detail="Email đăng nhập đã tồn tại")
-        employee_role = (await db.execute(
-            select(Role).where(Role.role_code == "EMPLOYEE")
-        )).scalar_one_or_none()
-        if not employee_role:
-            raise HTTPException(status_code=400, detail="Chưa có quyền EMPLOYEE. Vui lòng khởi tạo dữ liệu mẫu.")
 
-    emp = Employee(**emp_in.model_dump(exclude={"login_password"}))
+    emp = Employee(**emp_in.model_dump(exclude={"login_password", "role_code"}))
     try:
         db.add(emp)
         await db.flush()
-        if emp_in.login_password is not None and employee_role is not None:
+        if emp_in.login_password is not None and role_obj is not None:
             account = UserAccount(
                 employee_id=emp.employee_id,
                 login_email=emp_in.email,
@@ -123,18 +133,37 @@ async def create_employee(
             await db.flush()
             db.add(UserRoleAssignment(
                 user_account_id=account.user_account_id,
-                role_id=employee_role.role_id,
+                role_id=role_obj.role_id,
             ))
+            await db.flush()
+
+        # If role is MANAGER, initialize their annual leave balance to 18 days for current year
+        if target_role_code == "MANAGER":
+            from app.services.leave_service import LeaveService
+            await LeaveService.get_or_create_balance(db, emp.employee_id, date.today().year)
+
         await db.commit()
-    except IntegrityError:
+    except IntegrityError as e:
         await db.rollback()
-        raise HTTPException(status_code=409, detail="Mã nhân viên hoặc email đã tồn tại")
+        err_msg = str(getattr(e, "orig", e)).lower()
+        if "employee_code" in err_msg:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Mã nhân viên '{emp_in.employee_code}' đã tồn tại trong hệ thống"
+            )
+        elif "email" in err_msg or "login_email" in err_msg:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Email '{emp_in.email}' đã tồn tại trong hệ thống"
+            )
+        raise HTTPException(status_code=409, detail="Mã nhân viên hoặc email đã tồn tại trong hệ thống")
 
     # Reload with relationships
     stmt_load = select(Employee).where(Employee.employee_id == emp.employee_id).options(
         selectinload(Employee.department),
         selectinload(Employee.position),
-        selectinload(Employee.user_account)
+        selectinload(Employee.user_account).selectinload(UserAccount.role_assignments).selectinload(UserRoleAssignment.role),
+        selectinload(Employee.manager)
     )
     loaded_emp = (await db.execute(stmt_load)).scalar_one()
     return loaded_emp
@@ -150,7 +179,8 @@ async def get_employee(
     stmt = select(Employee).where(Employee.employee_id == employee_id).options(
         selectinload(Employee.department),
         selectinload(Employee.position),
-        selectinload(Employee.user_account)
+        selectinload(Employee.user_account).selectinload(UserAccount.role_assignments).selectinload(UserRoleAssignment.role),
+        selectinload(Employee.manager)
     )
     emp = (await db.execute(stmt)).scalar_one_or_none()
     if not emp:
@@ -184,7 +214,7 @@ async def update_employee(
             detail="Không tìm thấy nhân viên"
         )
 
-    update_data = emp_update.model_dump(exclude_unset=True, exclude={"new_password"})
+    update_data = emp_update.model_dump(exclude_unset=True, exclude={"new_password", "role_code"})
     account = (await db.execute(
         select(UserAccount).where(UserAccount.employee_id == employee_id)
     )).scalar_one_or_none()
@@ -196,8 +226,9 @@ async def update_employee(
         emp_update.new_password is not None
         or ("email" in update_data and str(update_data["email"]).lower() != emp.email.lower())
         or ("employment_status" in update_data and update_data["employment_status"] != emp.employment_status)
+        or (emp_update.role_code is not None)
     ):
-        raise HTTPException(status_code=400, detail="Không được đổi email, mật khẩu hoặc trạng thái của tài khoản demo")
+        raise HTTPException(status_code=400, detail="Không được đổi email, mật khẩu hoặc vai trò của tài khoản demo")
     # Preserve the original demo login email even if only capitalization changed.
     if is_demo and "email" in update_data:
         update_data.pop("email")
@@ -209,11 +240,29 @@ async def update_employee(
         )).scalar_one_or_none()
         if existing_login:
             raise HTTPException(status_code=409, detail="Email đăng nhập đã tồn tại")
+        assigned_role_code = (emp_update.role_code or "EMPLOYEE").upper()
         employee_role = (await db.execute(
-            select(Role).where(Role.role_code == "EMPLOYEE")
+            select(Role).where(Role.role_code == assigned_role_code)
         )).scalar_one_or_none()
         if not employee_role:
-            raise HTTPException(status_code=400, detail="Chưa có quyền EMPLOYEE. Vui lòng khởi tạo dữ liệu mẫu.")
+            raise HTTPException(status_code=400, detail=f"Chưa có quyền {assigned_role_code}. Vui lòng khởi tạo dữ liệu mẫu.")
+    elif emp_update.role_code is not None and account:
+        new_role_code = emp_update.role_code.upper()
+        new_role = (await db.execute(
+            select(Role).where(Role.role_code == new_role_code)
+        )).scalar_one_or_none()
+        if not new_role:
+            raise HTTPException(status_code=400, detail=f"Chưa có quyền {new_role_code}.")
+        await db.execute(
+            delete(UserRoleAssignment).where(UserRoleAssignment.user_account_id == account.user_account_id)
+        )
+        db.add(UserRoleAssignment(
+            user_account_id=account.user_account_id,
+            role_id=new_role.role_id,
+        ))
+        if new_role_code == "MANAGER":
+            from app.services.leave_service import LeaveService
+            await LeaveService.get_or_create_balance(db, employee_id, date.today().year)
     if "email" in update_data:
         email = str(update_data["email"])
         if not is_demo and email.lower() in DEMO_EMAILS:
@@ -302,7 +351,8 @@ async def update_employee(
     stmt_load = select(Employee).where(Employee.employee_id == employee_id).options(
         selectinload(Employee.department),
         selectinload(Employee.position),
-        selectinload(Employee.user_account)
+        selectinload(Employee.user_account).selectinload(UserAccount.role_assignments).selectinload(UserRoleAssignment.role),
+        selectinload(Employee.manager)
     )
     loaded_emp = (await db.execute(stmt_load)).scalar_one()
     return loaded_emp

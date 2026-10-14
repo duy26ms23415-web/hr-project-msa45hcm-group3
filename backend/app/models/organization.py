@@ -70,3 +70,18 @@ class Employee(Base):
     leave_requests: Mapped[List["LeaveRequest"]] = relationship("LeaveRequest", back_populates="employee", foreign_keys="[LeaveRequest.employee_id]")
     compensations: Mapped[List["EmployeeCompensation"]] = relationship("EmployeeCompensation", back_populates="employee")
     payroll_lines: Mapped[List["PayrollLine"]] = relationship("PayrollLine", back_populates="employee")
+
+    @property
+    def roles(self) -> List[str]:
+        """Return list of role codes assigned to this employee's user account without triggering lazy load."""
+        from sqlalchemy import inspect
+        state = inspect(self)
+        if "user_account" in state.dict and self.user_account:
+            ua_state = inspect(self.user_account)
+            if "role_assignments" in ua_state.dict and self.user_account.role_assignments:
+                return [
+                    ra.role.role_code
+                    for ra in self.user_account.role_assignments
+                    if "role" in inspect(ra).dict and ra.role and getattr(ra.role, "role_code", None)
+                ]
+        return []

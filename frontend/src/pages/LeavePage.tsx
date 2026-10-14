@@ -38,6 +38,7 @@ const { Title, Text } = Typography;
 
 export const LeavePage: React.FC = () => {
   const { user, hasRole } = useAuth();
+  const defaultQuota = hasRole(['MANAGER']) ? 18 : 12;
   const [balance, setBalance] = useState<LeaveBalance | null>(null);
   const [leaveTypes, setLeaveTypes] = useState<any[]>([]);
   const [myRequests, setMyRequests] = useState<LeaveRequest[]>([]);
@@ -217,7 +218,7 @@ export const LeavePage: React.FC = () => {
           <Card bordered={false} style={{ borderRadius: 12, boxShadow: '0 2px 8px rgba(0,0,0,0.04)' }}>
             <Statistic
               title="Tổng tiêu chuẩn phép năm"
-              value={balance ? balance.total_entitled_days : 12}
+              value={balance ? balance.total_entitled_days : defaultQuota}
               suffix="ngày"
               valueStyle={{ fontWeight: 700, color: '#1e293b' }}
             />
@@ -245,7 +246,7 @@ export const LeavePage: React.FC = () => {
           <Card bordered={false} style={{ borderRadius: 12, boxShadow: '0 2px 8px rgba(0,0,0,0.04)' }}>
             <Statistic
               title="Số ngày phép còn lại"
-              value={balance ? balance.remaining_days : 12}
+              value={balance ? balance.remaining_days : defaultQuota}
               suffix="ngày"
               valueStyle={{ fontWeight: 700, color: '#16a34a' }}
             />

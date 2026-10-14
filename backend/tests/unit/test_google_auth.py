@@ -36,7 +36,7 @@ async def test_verified_google_identity_requires_existing_active_account(monkeyp
     app.include_router(auth.router, prefix="/auth")
     app.dependency_overrides[get_db] = lambda: db
     monkeypatch.setattr(auth.settings, "GOOGLE_CLIENT_ID", "local-test-client")
-    monkeypatch.setattr(auth.id_token, "verify_oauth2_token", Mock(return_value={"email": "staff@example.test", "email_verified": True}))
+    monkeypatch.setattr(auth.id_token, "verify_oauth2_token", Mock(return_value={"email": "staff@fsb.edu.vn", "email_verified": True}))
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.post("/auth/login/google", json={"id_token": "test-token"})
     assert response.status_code == expected

@@ -1,5 +1,5 @@
 from datetime import date, datetime
-from typing import Optional
+from typing import Optional, List
 from pydantic import BaseModel, EmailStr, ConfigDict, Field, field_validator, AliasChoices, AliasPath
 
 
@@ -65,6 +65,10 @@ class EmployeeBase(BaseModel):
 
 class EmployeeCreate(EmployeeBase):
     login_password: Optional[str] = Field(default=None, min_length=8, max_length=72, repr=False)
+    role_code: Optional[str] = Field(
+        default="EMPLOYEE",
+        description="Role gán cho tài khoản nhân viên: ADMIN, HR, MANAGER, EMPLOYEE, KIOSK"
+    )
 
     @field_validator("login_password")
     @classmethod
@@ -72,6 +76,16 @@ class EmployeeCreate(EmployeeBase):
         if value is not None and len(value.encode("utf-8")) > 72:
             raise ValueError("Mật khẩu không được vượt quá 72 byte UTF-8")
         return value
+
+    @field_validator("role_code")
+    @classmethod
+    def validate_role_code(cls, value: Optional[str]) -> Optional[str]:
+        if value is not None:
+            normalized = value.strip().upper()
+            if normalized not in {"ADMIN", "HR", "MANAGER", "EMPLOYEE", "KIOSK"}:
+                raise ValueError("Role không hợp lệ. Cho phép: ADMIN, HR, MANAGER, EMPLOYEE, KIOSK")
+            return normalized
+        return "EMPLOYEE"
 
 
 class EmployeeUpdate(BaseModel):
@@ -87,6 +101,7 @@ class EmployeeUpdate(BaseModel):
     termination_date: Optional[date] = None
 
     new_password: Optional[str] = Field(default=None, min_length=8, max_length=72, repr=False)
+    role_code: Optional[str] = Field(default=None, description="Role cập nhật: ADMIN, HR, MANAGER, EMPLOYEE, KIOSK")
 
     @field_validator("new_password")
     @classmethod
@@ -94,6 +109,16 @@ class EmployeeUpdate(BaseModel):
         if value is not None and len(value.encode("utf-8")) > 72:
             raise ValueError("Mật khẩu không được vượt quá 72 byte UTF-8")
         return value
+
+    @field_validator("role_code")
+    @classmethod
+    def validate_role_code(cls, value: Optional[str]) -> Optional[str]:
+        if value is not None:
+            normalized = value.strip().upper()
+            if normalized not in {"ADMIN", "HR", "MANAGER", "EMPLOYEE", "KIOSK"}:
+                raise ValueError("Role không hợp lệ. Cho phép: ADMIN, HR, MANAGER, EMPLOYEE, KIOSK")
+            return normalized
+        return None
 
     @field_validator("full_name", "email", "department_id", "position_id", "employment_status", "hire_date")
     @classmethod
@@ -126,6 +151,7 @@ class EmployeeResponse(EmployeeBase):
         default=False,
         validation_alias=AliasChoices("has_login_account", AliasPath("user_account", "user_account_id")),
     )
+    roles: List[str] = Field(default_factory=list)
 
     @field_validator("has_login_account", mode="before")
     @classmethod

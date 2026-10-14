@@ -9,6 +9,7 @@ export interface User {
 export interface Employee {
   employee_id: number;
   has_login_account: boolean;
+  roles?: string[];
   employee_code: string;
   full_name: string;
   email: string;

@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import HTTPException, status
 
 from app.models.organization import Employee
+from app.models.auth import Role, UserAccount, UserRoleAssignment
 from app.models.leave import LeaveType, EmployeeLeaveBalance, LeaveRequest
 from app.models.attendance import AttendanceDay
 from app.schemas.leave import LeaveRequestCreate, LeaveRequestReview
@@ -24,7 +25,9 @@ class LeaveService:
 
     @staticmethod
     async def get_or_create_balance(db: AsyncSession, employee_id: int, year: int) -> EmployeeLeaveBalance:
-        """Get or initialize employee leave quota for a given year"""
+        """Get or initialize employee leave quota for a given year.
+        Default quota is 12 days per year, except for MANAGER role which receives 18 days per year.
+        """
         stmt = select(EmployeeLeaveBalance).where(
             and_(
                 EmployeeLeaveBalance.employee_id == employee_id,
@@ -32,17 +35,36 @@ class LeaveService:
             )
         )
         balance = (await db.execute(stmt)).scalar_one_or_none()
+
+        # Check if employee has MANAGER role
+        stmt_roles = (
+            select(Role.role_code)
+            .join(UserRoleAssignment, UserRoleAssignment.role_id == Role.role_id)
+            .join(UserAccount, UserAccount.user_account_id == UserRoleAssignment.user_account_id)
+            .where(UserAccount.employee_id == employee_id)
+        )
+        roles = (await db.execute(stmt_roles)).scalars().all()
+        is_manager = "MANAGER" in roles
+        standard_quota = Decimal("18.00") if is_manager else Decimal("12.00")
+
         if not balance:
-            # Default quota is 12 days per year
             balance = EmployeeLeaveBalance(
                 employee_id=employee_id,
                 year=year,
-                total_entitled_days=Decimal("12.00"),
+                total_entitled_days=standard_quota,
                 used_days=Decimal("0.00"),
-                remaining_days=Decimal("12.00")
+                remaining_days=standard_quota
             )
             db.add(balance)
             await db.flush()
+        else:
+            # If employee has MANAGER role and their balance record has the old 12.00 default, upgrade to 18.00
+            if is_manager and balance.total_entitled_days == Decimal("12.00"):
+                diff = Decimal("18.00") - balance.total_entitled_days
+                balance.total_entitled_days = Decimal("18.00")
+                balance.remaining_days = balance.remaining_days + diff
+                await db.flush()
+
         return balance
 
     @staticmethod

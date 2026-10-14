@@ -32,43 +32,57 @@ export const MainLayout: React.FC = () => {
     }
   }, [location.state, location.pathname, navigate]);
 
-  const menuItems = [
-    {
-      key: '/dashboard',
-      icon: <DashboardOutlined />,
-      label: 'Tổng quan',
-    },
-    {
-      key: '/attendance',
-      icon: <ClockCircleOutlined />,
-      label: 'Chấm công',
-    },
-    {
-      key: '/leaves',
-      icon: <CalendarOutlined />,
-      label: 'Nghỉ phép',
-    },
-    {
-      key: '/payroll',
-      icon: <DollarOutlined />,
-      label: 'Bảng lương',
-    },
-    {
-      key: '/kiosk',
-      icon: <QrcodeOutlined />,
-      label: 'Màn hình Kiosk',
-    },
-    ...(hasRole(['ADMIN', 'HR']) ? [{ key: '/knowledge', icon: <RobotOutlined />, label: 'Tài liệu & chính sách' }] : []),
-    ...(hasRole(['ADMIN', 'HR', 'MANAGER'])
-      ? [
-          {
-            key: '/employees',
-            icon: <TeamOutlined />,
-            label: hasRole(['ADMIN', 'HR']) ? 'Nhân sự & QR Card' : 'Nhân viên của tôi',
-          },
-        ]
-      : []),
-  ];
+  const isKioskOnly = hasRole(['KIOSK']) && !hasRole(['ADMIN', 'HR', 'MANAGER', 'EMPLOYEE']);
+
+  const menuItems = isKioskOnly
+    ? [
+        {
+          key: '/kiosk',
+          icon: <QrcodeOutlined />,
+          label: 'Màn hình Kiosk',
+        },
+      ]
+    : [
+        {
+          key: '/dashboard',
+          icon: <DashboardOutlined />,
+          label: 'Tổng quan',
+        },
+        {
+          key: '/attendance',
+          icon: <ClockCircleOutlined />,
+          label: 'Chấm công',
+        },
+        {
+          key: '/leaves',
+          icon: <CalendarOutlined />,
+          label: 'Nghỉ phép',
+        },
+        {
+          key: '/payroll',
+          icon: <DollarOutlined />,
+          label: 'Bảng lương',
+        },
+        ...(hasRole(['KIOSK', 'ADMIN'])
+          ? [
+              {
+                key: '/kiosk',
+                icon: <QrcodeOutlined />,
+                label: 'Màn hình Kiosk',
+              },
+            ]
+          : []),
+        ...(hasRole(['ADMIN', 'HR']) ? [{ key: '/knowledge', icon: <RobotOutlined />, label: 'Tài liệu & chính sách' }] : []),
+        ...(hasRole(['ADMIN', 'HR', 'MANAGER'])
+          ? [
+              {
+                key: '/employees',
+                icon: <TeamOutlined />,
+                label: hasRole(['ADMIN', 'HR']) ? 'Nhân sự & QR Card' : 'Nhân viên của tôi',
+              },
+            ]
+          : []),
+      ];
 
   const userMenu = {
     items: [
@@ -79,11 +93,23 @@ export const MainLayout: React.FC = () => {
           <div style={{ padding: '4px 0' }}>
             <div style={{ fontWeight: 600 }}>{user?.login_email}</div>
             <div style={{ display: 'flex', gap: 4, marginTop: 4 }}>
-              {user?.roles.map((r) => (
-                <Tag color={r === 'ADMIN' ? 'red' : r === 'MANAGER' ? 'orange' : 'blue'} key={r}>
-                  {r}
-                </Tag>
-              ))}
+              {user?.roles.map((r) => {
+                const tagColor =
+                  r === 'ADMIN'
+                    ? 'red'
+                    : r === 'HR'
+                    ? 'purple'
+                    : r === 'MANAGER'
+                    ? 'orange'
+                    : r === 'KIOSK'
+                    ? 'cyan'
+                    : 'blue';
+                return (
+                  <Tag color={tagColor} key={r}>
+                    {r}
+                  </Tag>
+                );
+              })}
             </div>
           </div>
         ),

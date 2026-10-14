@@ -20,6 +20,7 @@ const { Title, Text, Paragraph } = Typography;
 
 export const DashboardPage: React.FC = () => {
   const { user, hasRole } = useAuth();
+  const defaultQuota = hasRole(['MANAGER']) ? 18 : 12;
   const navigate = useNavigate();
   const showEmployeeIdentity = hasRole(['ADMIN', 'HR', 'MANAGER']);
   const [employeesById, setEmployeesById] = useState<Record<number, Employee>>({});
@@ -126,20 +127,22 @@ export const DashboardPage: React.FC = () => {
         </div>
 
         <Space size="middle">
-          <Button
-            type="primary"
-            size="large"
-            icon={<QrcodeOutlined />}
-            onClick={() => navigate('/kiosk')}
-            style={{
-              background: '#0284c7',
-              borderColor: '#0284c7',
-              borderRadius: 8,
-              fontWeight: 600,
-            }}
-          >
-            Quẹt thẻ Kiosk
-          </Button>
+          {hasRole(['KIOSK', 'ADMIN']) && (
+            <Button
+              type="primary"
+              size="large"
+              icon={<QrcodeOutlined />}
+              onClick={() => navigate('/kiosk')}
+              style={{
+                background: '#0284c7',
+                borderColor: '#0284c7',
+                borderRadius: 8,
+                fontWeight: 600,
+              }}
+            >
+              Quẹt thẻ Kiosk
+            </Button>
+          )}
           <Button
             size="large"
             icon={<CalendarOutlined />}
@@ -203,7 +206,7 @@ export const DashboardPage: React.FC = () => {
             <Statistic
               title="Phép năm còn lại"
               value={balance ? balance.remaining_days : 0}
-              suffix={`/ ${balance ? balance.total_entitled_days : 12} ngày`}
+              suffix={`/ ${balance ? balance.total_entitled_days : defaultQuota} ngày`}
               prefix={<CalendarOutlined style={{ color: '#52c41a' }} />}
               valueStyle={{ fontWeight: 700, fontSize: 22, color: '#52c41a' }}
             />
