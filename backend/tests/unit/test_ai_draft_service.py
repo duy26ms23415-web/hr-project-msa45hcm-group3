@@ -108,6 +108,28 @@ async def test_update_rejects_unallowlisted_keys_and_increments_revision():
 
 
 @pytest.mark.asyncio
+async def test_report_update_does_not_restore_removed_employee_filter():
+    draft = SimpleNamespace(
+        expires_at=module.utc_now() + timedelta(minutes=5),
+        status="COLLECTING", command="DRAFT_REPORT",
+        typed_params={"kind": "ATTENDANCE", "scope": "COMPANY",
+                      "start_date": "2026-10-01", "end_date": "2026-10-15",
+                      "employee_id": 23},
+        missing_fields=[], revision=2,
+    )
+    db = fake_db(draft)
+    updated = await AIDraftService.update_draft(
+        db, "draft-id", 42,
+        {"kind": "ATTENDANCE", "scope": "COMPANY",
+         "start_date": "2026-10-01", "end_date": "2026-10-15"}, [],
+    )
+    assert "employee_id" not in updated.typed_params
+    assert updated.typed_params["scope"] == "COMPANY"
+    assert updated.revision == 3
+    db.flush.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_update_requires_collecting_status():
     draft = SimpleNamespace(
         expires_at=module.utc_now() + timedelta(minutes=5),

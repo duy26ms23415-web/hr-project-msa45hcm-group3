@@ -165,7 +165,11 @@ class AIDraftService:
         if draft.status != "COLLECTING":
             raise HTTPException(status_code=409, detail="AI_DRAFT_NOT_COLLECTING")
         AIDraftService._validate_command_and_params(draft.command, typed_params)
-        merged_params = {**draft.typed_params, **typed_params}
+        # Report edits pass the full target filter set; merging would
+        # restore removed filters (e.g. employee_id after a scope change).
+        # Leave and attendance drafts still apply partial updates.
+        merged_params = (dict(typed_params) if draft.command == "DRAFT_REPORT"
+                         else {**draft.typed_params, **typed_params})
         # Validate the merged data too, so malformed stored data cannot be
         # propagated back into an updated draft.
         AIDraftService._validate_command_and_params(draft.command, merged_params)
