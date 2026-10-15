@@ -1,8 +1,10 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Modal, Input, Button, Dropdown, Card, Spin, Space, Typography, message } from 'antd';
+import { Modal, Input, Button, Dropdown, Card, Spin, Space, Typography, DatePicker, Select, message } from 'antd';
 import { SendOutlined, RobotOutlined, UserOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import api from '../api/client';
-import { acceptsServerSuggestions, actorChanged, canSubmitChat, chatFailureState, newChatRequestKey, readableISODate } from '../api/aiChatState';
+import dayjs from 'dayjs';
+import type { ReportDefinition, ReportInputs, ReportRunCreateResponse, ReportScope } from '../types/reports';
+import { acceptsServerSuggestions, actorChanged, canSubmitChat, chatFailureState, newChatRequestKey, readableISODate, reportPeriodValid } from '../api/aiChatState';
 import { ChatReportPreview } from './ChatReportPreview';
 import { Link, useNavigate } from 'react-router-dom';
 import type { AIChatAction, AIChatResponse, AISource, AIExternalSource, AISuggestion, AIInputOption, AIDraftInputs, AIChatRequest } from '../types/ai';
@@ -22,6 +24,15 @@ interface ChatMessage {
 const suggestionLabel = (prompt: string) => prompt
   .replace(/\s*\(tham kh\u1ea3o m\u1ee5c\s+[^)]*\)\s*$/i, '')
   .trim();
+
+const reportLabels: Record<ReportInputs['kind'], string> = {
+  ATTENDANCE: 'Chấm công', LEAVE: 'Nghỉ phép', ATTENDANCE_FIX: 'Giải trình công',
+  APPROVAL_QUEUE: 'Đơn chờ duyệt', HEADCOUNT: 'Nhân sự hiện tại',
+  MY_PAYSLIP: 'Phiếu lương cá nhân', PAYROLL_SUMMARY: 'Tổng hợp lương',
+};
+const scopeLabels: Record<ReportScope, string> = {
+  SELF: 'Bản thân', DIRECT_REPORTS: 'Nhân viên trực tiếp', COMPANY: 'Toàn công ty',
+};
 
 const sourceGroupKey = (source: AISource) => `${source.document_id}-${source.version_id ?? 'current'}`;
 
@@ -45,6 +56,11 @@ export const AIChatModal: React.FC<AIChatModalProps> = ({ open, onClose }) => {
   const [previewRunId, setPreviewRunId] = useState<string | null>(null);
   const [editingRunId, setEditingRunId] = useState<string | null>(null);
   const [lastReportRunId, setLastReportRunId] = useState<string | null>(null);
+  const [reportSetup, setReportSetup] = useState<ReportInputs | null>(null);
+  const [reportAllowedScopes, setReportAllowedScopes] = useState<ReportScope[]>([]);
+  const [reportSetupLoading, setReportSetupLoading] = useState(false);
+  const [reportSaving, setReportSaving] = useState(false);
+  const [reportUncertain, setReportUncertain] = useState(false);
   const [inputVal, setInputVal] = useState('');
   const [loading, setLoading] = useState(false);
   const [activeDraftId, setActiveDraftId] = useState<string | null>(null);
@@ -82,6 +98,9 @@ export const AIChatModal: React.FC<AIChatModalProps> = ({ open, onClose }) => {
       setMissingFields([]);
       setInputOptions([]);
       setLastReportRunId(null);
+      setReportSetup(null);
+      setReportAllowedScopes([]);
+      setReportUncertain(false);
       setEditingRunId(null);
       setPreviewRunId(null);
       setRetryMessage(null);
@@ -245,12 +264,76 @@ export const AIChatModal: React.FC<AIChatModalProps> = ({ open, onClose }) => {
     setPreviewRunId(null);
     setEditingRunId(null);
     setLastReportRunId(null);
+    setReportSetup(null);
+    setReportAllowedScopes([]);
+    setReportUncertain(false);
+  };
+
+  const openReportSetup = async (data: ReportInputs) => {
+    const { kind, start_date, end_date, scope, department_id, employee_id } = data;
+    const requestActor = actorIdRef.current;
+    setReportUncertain(false);
+    setReportAllowedScopes([]);
+    setReportSetup({ kind, start_date, end_date, scope, department_id, employee_id });
+    setReportSetupLoading(true);
+    try {
+      // The catalog comes from the server; do not offer a scope inferred from UI role names.
+      const response = await api.get<{ reports: ReportDefinition[] }>('/reports/catalog');
+      if (actorIdRef.current !== requestActor) return;
+      const definition = response.data.reports.find((item) => item.kind === kind);
+      if (!definition || !definition.scopes.length) {
+        setReportSetup(null);
+        message.error('Loại báo cáo này không khả dụng trong phạm vi quyền của bạn.');
+        return;
+      }
+      setReportAllowedScopes(definition.scopes);
+      setReportSetup((current) => current && current.kind === kind ? {
+        ...current,
+        scope: scope && definition.scopes.includes(scope) ? scope : definition.default_scope,
+      } : current);
+    } catch {
+      if (actorIdRef.current === requestActor) {
+        setReportSetup(null);
+        message.error('Chưa tải được danh mục báo cáo và quyền truy cập.');
+      }
+    } finally {
+      if (actorIdRef.current === requestActor) setReportSetupLoading(false);
+    }
+  };
+
+  const createConfiguredReport = async () => {
+    if (!reportSetup || !reportSetup.scope || reportSaving || reportUncertain ||
+        !reportPeriodValid(reportSetup.kind, reportSetup.start_date, reportSetup.end_date)) return;
+    const requestActor = actorIdRef.current;
+    setReportSaving(true);
+    try {
+      const response = await api.post<ReportRunCreateResponse>('/reports/runs', reportSetup);
+      if (actorIdRef.current !== requestActor) return;
+      setReportSetup(null);
+      setLastReportRunId(response.data.run.run_id);
+      setPreviewRunId(response.data.run.run_id);
+      setEditingRunId(null);
+      message.success('Đã tạo báo cáo. Bạn có thể xem trước và tải Excel.');
+    } catch (err: any) {
+      if (actorIdRef.current !== requestActor) return;
+      const status = err?.response?.status;
+      if (status === undefined || status >= 500) {
+        setReportUncertain(true);
+        message.error('Chưa xác nhận được kết quả tạo báo cáo. Hãy kiểm tra danh sách báo cáo trước khi tạo lại để tránh trùng.');
+      } else {
+        message.error(status === 403 ? 'Bạn không có quyền tạo báo cáo với phạm vi đã chọn.'
+          : status === 404 ? 'Dữ liệu báo cáo hoặc kỳ lương chưa khả dụng.'
+          : 'Không thể tạo báo cáo. Vui lòng kiểm tra kỳ và phạm vi đã chọn.');
+      }
+    } finally {
+      if (actorIdRef.current === requestActor) setReportSaving(false);
+    }
   };
 
   const handleActionClick = (action: AIChatAction) => {
     if (action.action_type === 'OPEN_REPORT') {
       if (action.data.run_id) setPreviewRunId(action.data.run_id);
-      else void handleSendMessage('Tạo báo cáo', true, undefined);
+      else void openReportSetup(action.data);
       return;
     }
     onClose();
@@ -555,6 +638,44 @@ export const AIChatModal: React.FC<AIChatModalProps> = ({ open, onClose }) => {
           Gửi
         </Button>
       </div>
+      <Modal
+        open={!!reportSetup}
+        title="Kiểm tra và tạo báo cáo"
+        okText="Tạo báo cáo"
+        cancelText="Đóng"
+        onCancel={() => { if (!reportSaving) { setReportSetup(null); setReportUncertain(false); } }}
+        onOk={() => void createConfiguredReport()}
+        confirmLoading={reportSaving}
+        okButtonProps={{ disabled: reportSetupLoading || reportUncertain || !reportSetup?.scope || !reportSetup ||
+          !reportPeriodValid(reportSetup.kind, reportSetup.start_date, reportSetup.end_date) }}
+      >
+        {reportSetupLoading ? <Spin /> : reportSetup && <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+          <div><Typography.Text strong>Loại báo cáo: </Typography.Text>{reportLabels[reportSetup.kind]}</div>
+          <div>
+            <Typography.Text strong>Từ ngày</Typography.Text>
+            <DatePicker format="DD/MM/YYYY" value={reportSetup.start_date ? dayjs(reportSetup.start_date) : null}
+              onChange={(value) => setReportSetup((current) => current && ({ ...current, start_date: value?.format('YYYY-MM-DD') || '' }))}
+              style={{ display: 'block', maxWidth: 260, marginTop: 4 }} />
+          </div>
+          <div>
+            <Typography.Text strong>Đến ngày</Typography.Text>
+            <DatePicker format="DD/MM/YYYY" value={reportSetup.end_date ? dayjs(reportSetup.end_date) : null}
+              onChange={(value) => setReportSetup((current) => current && ({ ...current, end_date: value?.format('YYYY-MM-DD') || '' }))}
+              style={{ display: 'block', maxWidth: 260, marginTop: 4 }} />
+          </div>
+          <div>
+            <Typography.Text strong>Phạm vi</Typography.Text>
+            <Select<ReportScope> value={reportSetup.scope} style={{ display: 'block', maxWidth: 320, marginTop: 4 }}
+              options={reportAllowedScopes.map((scope) => ({ value: scope, label: scopeLabels[scope] }))}
+              onChange={(scope) => setReportSetup((current) => current && ({ ...current, scope }))} />
+          </div>
+          {reportSetup.employee_id != null && <Typography.Text type="secondary">Mã nhân viên: {reportSetup.employee_id}</Typography.Text>}
+          {reportSetup.department_id != null && <Typography.Text type="secondary">Mã phòng ban: {reportSetup.department_id}</Typography.Text>}
+          {!reportPeriodValid(reportSetup.kind, reportSetup.start_date, reportSetup.end_date) &&
+            <Typography.Text type="danger">Kỳ không hợp lệ. Hãy chọn hai ngày trong cùng năm; báo cáo lương yêu cầu một tháng trọn vẹn.</Typography.Text>}
+          {reportUncertain && <Typography.Text type="warning">Kết quả tạo báo cáo chưa rõ. Đã khóa gửi lại để tránh tạo trùng; hãy kiểm tra các báo cáo hiện có.</Typography.Text>}
+        </Space>}
+      </Modal>
       <Modal open={!!reference} onCancel={() => setReference(null)} footer={null} title={reference?.title} width={720}>
         <Typography.Paragraph style={{ whiteSpace: 'pre-wrap' }}>{reference?.content}</Typography.Paragraph>
         {reference?.source_url && /^https?:\/\//i.test(reference.source_url) && <a href={reference.source_url} target="_blank" rel="noopener noreferrer">Mở tài liệu gốc</a>}
