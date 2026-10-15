@@ -314,7 +314,7 @@ export const EmployeesPage: React.FC = () => {
         )}
       </div>
 
-      <Space>
+      <Space wrap>
         <Text>Trạng thái tài khoản:</Text>
         <Select
           value={accountFilter}
@@ -331,6 +331,7 @@ export const EmployeesPage: React.FC = () => {
       {/* Employees Table */}
       <Card bordered={false} style={{ borderRadius: 12, boxShadow: '0 2px 8px rgba(0,0,0,0.04)' }}>
         <Table
+          scroll={{ x: 'max-content' }}
           dataSource={visibleEmployees}
           rowKey="employee_id"
           loading={loading}
@@ -339,6 +340,7 @@ export const EmployeesPage: React.FC = () => {
             ...(isAdmin ? [{
               title: 'Thao tác',
               key: 'edit_employee',
+              width: 210,
               render: (_: unknown, record: Employee) => (
                 <Space wrap>
                 <Button size="small" icon={<EditOutlined />} onClick={() => {
@@ -366,22 +368,26 @@ export const EmployeesPage: React.FC = () => {
               title: 'Mã NV',
               dataIndex: 'employee_code',
               key: 'employee_code',
+              width: 100,
               render: (code) => <b>{code}</b>,
             },
             {
               title: 'Họ và tên',
               dataIndex: 'full_name',
               key: 'full_name',
+              width: 200,
               render: (name) => <span style={{ fontWeight: 600 }}>{name}</span>,
             },
             {
               title: 'Email',
               dataIndex: 'email',
               key: 'email',
+              width: 260,
             },
             {
               title: 'Vai trò (Role)',
               key: 'roles',
+              width: 140,
               render: (_: unknown, record: Employee) => {
                 const roleList = record.roles && record.roles.length > 0 ? record.roles : ['EMPLOYEE'];
                 return (
@@ -408,24 +414,28 @@ export const EmployeesPage: React.FC = () => {
               title: 'Số điện thoại',
               dataIndex: 'phone_number',
               key: 'phone_number',
+              width: 150,
               render: (p) => p || '-',
             },
             {
               title: 'Phòng ban',
               dataIndex: 'department',
               key: 'department',
+              width: 240,
               render: (d) => <Tag color="blue">{d?.department_name || 'Phòng Nhân sự'}</Tag>,
             },
             {
               title: 'Vị trí',
               dataIndex: 'position',
               key: 'position',
+              width: 200,
               render: (p) => p?.position_name || 'Chuyên viên',
             },
             {
               title: 'Quản lý trực tiếp',
               dataIndex: 'manager',
               key: 'manager',
+              width: 220,
               render: (manager) =>
                 manager ? (
                   <span>
@@ -442,6 +452,7 @@ export const EmployeesPage: React.FC = () => {
               title: 'Trạng thái',
               dataIndex: 'employment_status',
               key: 'employment_status',
+              width: 160,
               render: (s) => (
                 <Tag color={s === 'ACTIVE' ? 'success' : 'default'}>
                   {s === 'ACTIVE' ? 'Đang làm việc' : s === 'TERMINATED' ? 'Đã nghỉ việc' : s === 'INACTIVE' ? 'Tạm ngưng' : s}
@@ -451,6 +462,7 @@ export const EmployeesPage: React.FC = () => {
             {
               title: 'Thẻ QR',
               key: 'qr_card',
+              width: 150,
               render: (_, record) => (
                 <Button
                   size="small"

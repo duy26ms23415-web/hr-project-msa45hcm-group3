@@ -85,3 +85,13 @@ html, body, #root {
   animation: scanLaser 2s ease-in-out infinite;
   z-index: 10;
 }
+
+/* Keep wide tables inside the shared content area for every account role. */
+.hrms-content .ant-table-wrapper {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.hrms-content .ant-table-content {
+  overflow-x: auto;
+}
