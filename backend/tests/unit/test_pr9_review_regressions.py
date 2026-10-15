@@ -99,7 +99,7 @@ async def test_semantic_misclassified_self_cannot_draft_for_named_employee(monke
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("message", ["Xin nghỉ ngày mai", "Tôi muốn xin nghỉ ngày mai", "Vui lòng giúp tôi tạo giải trình hôm qua"])
+@pytest.mark.parametrize("message", ["Xin nghỉ ngày mai", "Tôi muốn xin nghỉ ngày mai", "Xin nghỉ ngày mai cho tôi", "Xin nghỉ ngày mai cho con đi khám", "Vui lòng giúp tôi tạo giải trình hôm qua"])
 async def test_self_and_bare_draft_commands_still_work(monkeypatch, message):
     monkeypatch.setattr(settings, "GEMINI_ENABLED", False)
     start = AsyncMock(return_value=AIChatResponse(reply="draft"))
