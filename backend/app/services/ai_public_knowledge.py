@@ -42,12 +42,21 @@ async def source_url(uri):
         return None
 
 
+# Common Vietnamese surnames, accented and unaccented ("Nguyen Van A"). The
+# unaccented "Do"/"Ho" are left out: they are ordinary words ("do" = because).
+# This is defence in depth only; public search stays opt-in for that reason.
+_SURNAMES = ("Nguyễn|Trần|Lê|Phạm|Hoàng|Huỳnh|Phan|Vũ|Võ|Đặng|Bùi|Đỗ|Hồ|Ngô|Dương|Đinh|"
+             "Nguyen|Tran|Le|Pham|Hoang|Huynh|Vu|Vo|Dang|Bui|Ngo|Duong|Dinh")
+_PERSON_NAME = re.compile(
+    rf"\b(?:{_SURNAMES})\s+[A-ZÀ-ỴĐ][a-zà-ỹđ]*(?:\s+[A-ZÀ-ỴĐ][a-zà-ỹđ]*){{0,2}}\b")
+
+
 def public_question(message):
     """Public queries contain no retrieved company passages or employee context."""
     value = re.sub(r"\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b", "[email]", message)
     value = re.sub(r"(?<!\w)(?:\+?84|0)(?:[ .-]?\d){9}(?!\d)", "[phone]", value)
     value = re.sub(r"\b(?:EMP|E)\d+\b", "[employee]", value, flags=re.IGNORECASE)
-    value = re.sub(r"\b(?:Nguyễn|Trần|Lê|Phạm|Hoàng|Huỳnh|Phan|Vũ|Võ|Đặng|Bùi|Đỗ|Hồ|Ngô|Dương|Đinh)\s+[A-ZÀ-ỴĐ][a-zà-ỹđ]+(?:\s+[A-ZÀ-ỴĐ][a-zà-ỹđ]+){0,2}\b", "[person]", value)
+    value = _PERSON_NAME.sub("[person]", value)
     return value[:2000]
 
 

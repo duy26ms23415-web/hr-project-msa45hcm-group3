@@ -61,4 +61,6 @@ def require_capability(roles: set[str], capability: str) -> None:
 
 
 def has_hr_role(roles: set[str], allowed_roles: set[str]) -> bool:
-    return bool("ADMIN" in roles or known_roles(roles) & allowed_roles)
+    """General RBAC check. Never raises: roles outside the AI capability table
+    (e.g. KIOSK) must get the endpoint's normal 403, not an AI error code."""
+    return bool("ADMIN" in roles or roles & allowed_roles)

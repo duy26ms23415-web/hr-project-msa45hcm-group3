@@ -13,6 +13,8 @@ from app.api.deps import get_current_user
 from app.models.auth import UserAccount
 from app.schemas.ai import AIChatRequest, AIChatResponse, AISuggestion, AISource
 from app.ai.orchestrator import ChatOrchestrator
+from app.ai.providers.gemini import request_deadline
+from app.core.config import settings
 from app.services.ai_access import allowed_knowledge_roles, user_roles
 from app.core.authorization import capabilities, known_roles
 from app.services.ai_role_scopes import scoped_ai_access
@@ -79,8 +81,11 @@ async def get_suggestions(
         ))).mappings().all()
     visible_sections, ambiguous_codes = unique_visible_sections(rows)
     missing_codes = [spec[2] for spec in citation_specs if spec[2] not in visible_sections and spec[2] not in ambiguous_codes]
+    # Diagnostics cost an extra query per request; only gather them when the
+    # operator has turned on DEBUG logging to investigate missing suggestions.
+    debug = logger.isEnabledFor(logging.DEBUG)
     diagnostics = {}
-    if missing_codes:
+    if missing_codes and debug:
         audit_rows = (await db.execute(select(
             KnowledgeSection.section_code,
             KnowledgeDocument.status.label("document_status"),
@@ -97,8 +102,10 @@ async def get_suggestions(
                        for code in missing_codes}
     for suggestion_id, prompt, section_code in citation_specs:
         row = visible_sections.get(section_code)
-        logging.getLogger(__name__).info(json.dumps({"event": "ai_suggestion_visibility", "suggestion_id": suggestion_id,
-                                                       "reason": "AMBIGUOUS_SOURCE" if section_code in ambiguous_codes else "AVAILABLE" if row else diagnostics[section_code]}))
+        if debug:
+            logger.debug(json.dumps({"event": "ai_suggestion_visibility", "suggestion_id": suggestion_id,
+                                     "reason": "AMBIGUOUS_SOURCE" if section_code in ambiguous_codes
+                                     else "AVAILABLE" if row else diagnostics.get(section_code, "UNKNOWN")}))
         if section_code in ambiguous_codes and suggestion_id in policy_ids:
             # The policy is still an allowed question. Cite only after retrieval
             # of the actual answer, not an arbitrary one of several documents.
@@ -131,7 +138,7 @@ async def get_suggestions(
             passage = next(iter(retrieve(reference_queries[suggestion_id], documents)), None)
             if passage is None:
                 reason = "DOCUMENT_NOT_FOUND" if not documents else "SECTION_NOT_ANSWERABLE"
-                logger.info(json.dumps({"event": "ai_suggestion_visibility", "suggestion_id": suggestion_id, "reason": reason}))
+                logger.debug(json.dumps({"event": "ai_suggestion_visibility", "suggestion_id": suggestion_id, "reason": reason}))
                 continue
             source = AISource(
                 document_id=passage.document_id, title=passage.title, excerpt="",
@@ -171,23 +178,26 @@ async def chat_with_hr_ai(
     and supports drafting leave requests or attendance fixes.
     """
     try:
-        async with asyncio.timeout(30):
-            async with secured_operation(db, current_user.user_account_id, "CHAT", "CHAT") as audit:
-                result = await ChatOrchestrator.process_chat(
-                    db,
-                    current_user.employee_id,
-                    req,
-                    user_roles(current_user),
-                    owner_user_account_id=current_user.user_account_id,
-                    authenticated_user=current_user,
-                )
-                result.request_id = audit["request_id"]
-                audit["command"] = result.action.action_type if result.action else result.answer_mode
-                if result.answer_mode == "OUT_OF_SCOPE":
-                    audit["outcome"] = "DENIED" if result.reply.startswith("Bạn không có quyền") else "REJECTED"
-                    if audit["outcome"] == "DENIED":
-                        raise HTTPException(403, "PERMISSION_DENIED")
-                return result
+        # Provider calls share a budget that ends before the hard timeout, so
+        # a slow model degrades to a fallback answer instead of a 503.
+        async with asyncio.timeout(settings.AI_CHAT_TIMEOUT_SECONDS):
+            with request_deadline(settings.AI_CHAT_TIMEOUT_SECONDS - 3):
+                async with secured_operation(db, current_user.user_account_id, "CHAT", "CHAT") as audit:
+                    result = await ChatOrchestrator.process_chat(
+                        db,
+                        current_user.employee_id,
+                        req,
+                        user_roles(current_user),
+                        owner_user_account_id=current_user.user_account_id,
+                        authenticated_user=current_user,
+                    )
+                    result.request_id = audit["request_id"]
+                    audit["command"] = result.action.action_type if result.action else result.answer_mode
+                    if result.answer_mode == "OUT_OF_SCOPE":
+                        audit["outcome"] = "DENIED" if result.reply.startswith("Bạn không có quyền") else "REJECTED"
+                        if audit["outcome"] == "DENIED":
+                            raise HTTPException(403, "PERMISSION_DENIED")
+                    return result
     except (SQLAlchemyError, TimeoutError, OSError) as exc:
         raise HTTPException(status_code=503, detail="DATA_SERVICE_UNAVAILABLE") from exc
     except HTTPException as exc:

@@ -1,3 +1,5 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
@@ -7,7 +9,14 @@ from app.ai.providers.gemini import readiness
 import json
 import logging
 
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    logging.getLogger(__name__).info(json.dumps({"event": "ai_provider_readiness", **readiness()}))
+    yield
+
+
 app = FastAPI(
+    lifespan=lifespan,
     title=settings.PROJECT_NAME,
     openapi_url=f"{settings.API_V1_PREFIX}/openapi.json",
     docs_url=f"{settings.API_V1_PREFIX}/docs",
@@ -15,9 +24,6 @@ app = FastAPI(
 )
 
 
-@app.on_event("startup")
-async def log_ai_readiness():
-    logging.getLogger(__name__).info(json.dumps({"event": "ai_provider_readiness", **readiness()}))
 install_ai_errors(app, (f"{settings.API_V1_PREFIX}/ai", f"{settings.API_V1_PREFIX}/reports"))
 
 # Set up CORS

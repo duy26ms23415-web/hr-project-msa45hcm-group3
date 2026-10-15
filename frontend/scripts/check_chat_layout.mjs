@@ -8,8 +8,23 @@ import { spawn } from 'node:child_process';
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const dist = path.join(repo, 'frontend/dist');
 const output = path.join(repo, 'backend/storage/tmp/chat-layout-check');
-const edge = 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe';
-await fs.access(edge);
+// Any Chromium-based browser works. Set CHROME_PATH to override detection.
+const browserCandidates = [
+  process.env.CHROME_PATH,
+  'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
+  'C:/Program Files/Google/Chrome/Application/chrome.exe',
+  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+  '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
+  '/usr/bin/google-chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser', '/usr/bin/microsoft-edge',
+].filter(Boolean);
+let edge = null;
+for (const candidate of browserCandidates) {
+  try { await fs.access(candidate); edge = candidate; break; } catch { /* try next */ }
+}
+if (!edge) {
+  console.error('No Chromium-based browser found. Set CHROME_PATH to Chrome, Chromium or Edge.');
+  process.exit(2);
+}
 await fs.mkdir(output, { recursive: true });
 const annotation = ' (tham khảo mục PAGE_1_SECTION_3 Điều 114: ' + 'Nội dung tham khảo dài để kiểm tra bố cục. '.repeat(8) + ', trang 1)';
 const suggestions = Array.from({ length: 12 }, (_, index) => ({ suggestion_id: `test-${index}`, catalog_version: 'v1', prompt: `Xem số ngày phép hoặc chấm công ${index}${annotation}` }));

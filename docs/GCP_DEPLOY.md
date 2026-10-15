@@ -22,6 +22,15 @@ Provide a reachable PostgreSQL database and configure:
 - GEMINI_API_KEY: optional, for the AI provider
 - GEMINI_ENABLED: set `true` only on revisions intended to call Gemini; default `false`
 - GEMINI_MODEL_NAME: verify this exact identifier using the deployed key before use
+- GEMINI_SEMANTIC_ENABLED: optional, default `false`. Sends free-text chat
+  messages (emails and phone numbers masked) to Gemini for intent routing.
+- GEMINI_PUBLIC_SEARCH_ENABLED: optional, default `false`. When internal
+  documents cannot answer a policy question, sends the question to Gemini with
+  Google Search grounding. Personal names are masked on a best-effort basis
+  only; enable this only after privacy review.
+- GEMINI_PUBLIC_SEARCH_TIMEOUT_SECONDS: default `10`.
+- AI_CHAT_TIMEOUT_SECONDS: default `30`. Total time for one chat request; all
+  Gemini calls in a request share this budget and fall back when it runs out.
 
 Use Secret Manager for secrets. Configure Cloud Run connectivity to the database.
 The local docker-compose PostgreSQL service is not deployed by this image.
