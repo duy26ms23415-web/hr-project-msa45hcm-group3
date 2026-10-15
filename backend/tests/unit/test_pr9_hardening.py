@@ -140,6 +140,7 @@ async def test_approval_queue_report_requires_direct_report_capability():
         await ReportService.visible_employee_ids(None, actor("EMPLOYEE"), "APPROVAL_QUEUE", None, None)
     assert error.value.status_code == 403
 
+
 # --- Name masking: casing variants and false positives (review of 4b433d1) ---
 
 @pytest.mark.parametrize("message,kept", [

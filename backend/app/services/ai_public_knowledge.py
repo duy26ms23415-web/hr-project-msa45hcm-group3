@@ -183,3 +183,4 @@ async def answer_public_question(question, today):
             reply="Hiện chưa thể hoàn tất tra cứu để trả lời câu hỏi này. Bạn vui lòng thử lại sau hoặc liên hệ HR để được hỗ trợ.",
             status="UNAVAILABLE", message_code=f"PUBLIC_SEARCH_{exc.category}",
         )
+
