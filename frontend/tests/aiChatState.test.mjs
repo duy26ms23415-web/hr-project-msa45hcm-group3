@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { acceptsServerSuggestions, actorChanged, canSubmitChat, chatFailureState, newChatRequestKey, readableISODate } from '../src/api/aiChatState.ts';
+import { acceptsServerSuggestions, actorChanged, canSubmitChat, chatFailureState, newChatRequestKey, readableISODate, reportPeriodValid } from '../src/api/aiChatState.ts';
 
 test('server suggestions are accepted without local role filtering', () => {
   const response = [{ suggestion_id: 'knowledge_admin', prompt: 'Mở tài liệu', catalog_version: 'v1' }];
@@ -55,4 +55,13 @@ test('chat request keys are unique 32-character hex tokens', () => {
   const second = newChatRequestKey();
   assert.match(first, /^[a-f0-9]{32}$/);
   assert.notEqual(first, second);
+});
+
+test('report setup validates dates and requires a full payroll month', () => {
+  assert.equal(reportPeriodValid('ATTENDANCE', '2026-10-01', '2026-10-15'), true);
+  assert.equal(reportPeriodValid('ATTENDANCE', '2026-02-31', '2026-03-01'), false);
+  assert.equal(reportPeriodValid('ATTENDANCE', '2026-12-31', '2027-01-01'), false);
+  assert.equal(reportPeriodValid('PAYROLL_SUMMARY', '2026-02-01', '2026-02-28'), true);
+  assert.equal(reportPeriodValid('MY_PAYSLIP', '2026-02-01', '2026-02-27'), false);
+  assert.equal(reportPeriodValid('PAYROLL_SUMMARY', '2026-02-02', '2026-02-28'), false);
 });
