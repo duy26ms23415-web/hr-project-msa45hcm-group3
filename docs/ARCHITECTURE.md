@@ -142,6 +142,10 @@ Hệ thống phân tách mạch lạc thành 4 tầng chính:
   * Axios Client tập trung (`api/client.ts`) với Interceptor tự động gán Bearer Token và xử lý lỗi phản hồi thống nhất.
 
 #### 4.2. Tầng Định tuyến & Bảo mật API (API & Security Layer)
+
+* Bảng công: `AttendancePage` gửi bộ lọc tới `GET /attendance/records`; endpoint kiểm tra danh sách trạng thái (gồm `HALF_DAY`) và áp dụng điều kiện SQL trong phạm vi nhân viên theo JWT.
+* `MainLayout` ẩn nút, khối giới thiệu và modal AI với tài khoản chỉ có `KIOSK`; đây là điều kiện giao diện, không thay thế kiểm tra quyền tại API.
+* Docker truyền `VITE_GOOGLE_CLIENT_ID` vào bước build Vite khi có cấu hình Google SSO; biến này không bắt buộc để build image.
 * Sử dụng FastAPI hỗ trợ chuẩn OpenAPI 3.0 (Swagger UI tự động).
 * **Dependency Injection (`deps.py`):**
   * `get_current_user`: Trích xuất và giải mã JWT token từ Header `Authorization`.

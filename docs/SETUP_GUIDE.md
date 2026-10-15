@@ -104,6 +104,22 @@ npm run dev
 
 ---
 
+#### Build image ứng dụng từ thư mục gốc
+
+Không bắt buộc cấu hình Google SSO để build:
+
+```bash
+docker build -t hrms .
+```
+
+Khi dùng Google SSO, truyền Client ID vào lúc build frontend (biến lúc chạy container không thay đổi bundle Vite):
+
+```bash
+docker build --build-arg VITE_GOOGLE_CLIENT_ID=<google-client-id> -t hrms .
+```
+
+Hai lệnh Docker trên chưa được kiểm chứng bằng Docker build. Các sửa đổi bộ lọc `HALF_DAY` và ẩn AI cho tài khoản chỉ có `KIOSK` không cần migration hoặc seed mới. Kiểm tra giao diện bằng tài khoản HR/Manager (lọc nửa ngày) và Kiosk (không hiện AI).
+
 ### 6. Tài khoản dùng thử (Demo Accounts)
 
 #### Kiểm tra sửa người được đọc tài liệu

@@ -44,7 +44,7 @@ type RecordFilters = {
   dates?: [dayjs.Dayjs, dayjs.Dayjs];
 };
 
-const attendanceStatuses = ['PRESENT', 'INCOMPLETE', 'ABSENT', 'ON_LEAVE', 'HOLIDAY', 'REMOTE'];
+const attendanceStatuses = ['PRESENT', 'HALF_DAY', 'INCOMPLETE', 'ABSENT', 'ON_LEAVE', 'HOLIDAY', 'REMOTE'];
 
 export const AttendancePage: React.FC = () => {
   const { user, hasRole } = useAuth();

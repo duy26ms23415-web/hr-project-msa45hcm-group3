@@ -203,7 +203,7 @@ async def list_attendance_records(
     to_date: Optional[date] = None,
     employee_id: Optional[int] = None,
     email: Optional[str] = Query(None, max_length=254),
-    status_filter: Optional[List[Literal["PRESENT", "INCOMPLETE", "ABSENT", "ON_LEAVE", "HOLIDAY", "REMOTE"]]] = Query(None, alias="status"),
+    status_filter: Optional[List[Literal["PRESENT", "HALF_DAY", "INCOMPLETE", "ABSENT", "ON_LEAVE", "HOLIDAY", "REMOTE"]]] = Query(None, alias="status"),
     db: AsyncSession = Depends(get_db),
     current_user: UserAccount = Depends(get_current_user)
 ):

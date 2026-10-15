@@ -426,6 +426,9 @@ Toàn bộ API được phục vụ dưới tiền tố `/api/v1`. Các API yêu
 | `POST` | `/scans` | Kiosk Secret | Quét QR ghi nhận chỉ định loại lượt quét |
 
 ### 3.5. Bảng công & Giải trình Chấm công (`/attendance`)
+
+Đã triển khai: bảng công hỗ trợ lọc email, khoảng ngày và nhiều trạng thái, gồm `HALF_DAY` (nửa ngày). API nhận lặp tham số `status`, ví dụ `?status=PRESENT&status=HALF_DAY`; bộ lọc giữ nguyên phạm vi nhân viên theo quyền. Tài khoản chỉ có vai trò `KIOSK` không hiển thị trợ lý AI.
+
 | Phương thức | Endpoint | Quyền hạn | Mô tả nghiệp vụ |
 | :--- | :--- | :--- | :--- |
 | `GET` | `/attendance/records` | Mọi vai trò | Bảng công chi tiết (Nhân viên xem của mình, Quản lý xem cấp dưới, HR xem toàn công ty) |
