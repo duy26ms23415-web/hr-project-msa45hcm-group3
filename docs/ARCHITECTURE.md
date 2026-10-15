@@ -165,6 +165,8 @@ Toàn bộ quy tắc nghiệp vụ được cô lập trong các Service độc 
 
 ### 5. Kiến trúc Bảo mật (Security Architecture)
 
+Giao diện `KnowledgePage` dùng một hộp thoại quản lý cho lịch sử, kiểm tra công bố và chỉnh bản nháp. Sau khi lưu, dữ liệu phiên bản và mục được tải lại trước khi quay về phần kiểm tra; sau công bố, đóng hộp thoại và tải lại danh sách. API sửa quyền đọc độc lập chỉ nhận trường quyền, tránh gửi lại nội dung hoặc trạng thái cũ từ giao diện.
+
 1. **Bảo mật Mật khẩu:** Băm mật khẩu một chiều sử dụng thuật toán tiêu chuẩn `bcrypt` với muối ngẫu nhiên (salt rounds an toàn).
 2. **Xác thực Token (JWT Authentication):**
    * Sử dụng cơ chế ký số bảo mật HMAC-SHA256 (`HS256`).
@@ -172,6 +174,7 @@ Toàn bộ quy tắc nghiệp vụ được cô lập trong các Service độc 
 3. **Phân quyền vai trò (Role-Based Access Control - RBAC):**
    * Hệ thống hỗ trợ 4 vai trò: `ADMIN`, `HR`, `MANAGER`, `EMPLOYEE`.
    * Quyền hạn được kiểm tra ở cấp độ Endpoint trước khi logic nghiệp vụ được thực thi.
+   * **Quyền đọc tài liệu AI (đã triển khai):** `KnowledgePage` gọi `PATCH /api/v1/ai/knowledge/{document_id}/access` với schema chỉ nhận `minimum_role`. Backend lấy vai trò từ tài khoản xác thực, yêu cầu HR/Admin, khóa tài liệu rồi các phiên bản bị tác động, kiểm tra quyền hiện có và mức quyền đích trước khi cập nhật trong cùng giao dịch. Quyền được đồng bộ trên `KnowledgeDocument`, phiên bản hiện hành và các phiên bản `DRAFT`; nội dung, mục trích dẫn và trạng thái không đổi. Phiên bản lịch sử giữ `minimum_role` riêng; đọc PDF và truy xuất nguồn AI tiếp tục kiểm tra cả quyền tài liệu lẫn phiên bản. HR không thể sửa một phiên bản chỉ dành cho Admin thông qua tài liệu có quyền thấp hơn.
 4. **Bảo mật thiết bị Kiosk:**
    * Màn hình Kiosk quét thẻ giao tiếp với Backend qua mã khóa bí mật `X-Kiosk-Secret`.
    * Mã thẻ QR lưu trong cơ sở dữ liệu dưới dạng hash SHA-256; token thô không được lưu trữ trực tiếp.
