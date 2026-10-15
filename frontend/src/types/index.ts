@@ -44,7 +44,7 @@ export interface AttendanceRecord {
   first_check_in_at?: string;
   last_check_out_at?: string;
   worked_minutes: number;
-  attendance_status: 'PRESENT' | 'INCOMPLETE' | 'ABSENT' | 'ON_LEAVE' | 'HOLIDAY' | 'REMOTE';
+  attendance_status: 'PRESENT' | 'HALF_DAY' | 'INCOMPLETE' | 'ABSENT' | 'ON_LEAVE' | 'HOLIDAY' | 'REMOTE';
   updated_at: string;
 }
 

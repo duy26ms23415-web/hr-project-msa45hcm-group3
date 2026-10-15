@@ -179,9 +179,17 @@ class AttendanceService:
         if first_in and last_out:
             worked_mins = AttendanceService.calculate_worked_minutes(first_in, last_out)
 
-        # Status evaluation
+        # Status evaluation according to standard office hours (8h/day = 480 mins):
+        # - >= 480 mins (8h full day): PRESENT (1.0 work credit)
+        # - >= 240 mins (4h to < 8h): HALF_DAY (0.5 work credit)
+        # - < 240 mins or missing check-in/out: INCOMPLETE (0.0 work credit)
         if first_in and last_out:
-            att_status = "PRESENT" if worked_mins >= 240 else "INCOMPLETE"
+            if worked_mins >= 480:
+                att_status = "PRESENT"
+            elif worked_mins >= 240:
+                att_status = "HALF_DAY"
+            else:
+                att_status = "INCOMPLETE"
         elif first_in or last_out:
             att_status = "INCOMPLETE"
         else:
@@ -210,7 +218,10 @@ class AttendanceService:
             day_record.first_check_in_at = first_in
             day_record.last_check_out_at = last_out
             day_record.worked_minutes = worked_mins
-            day_record.attendance_status = att_status
+            if not first_in and not last_out and day_record.attendance_status in ("ON_LEAVE", "REMOTE", "HOLIDAY"):
+                pass  # Keep pre-existing leave/remote status if no scans occurred
+            else:
+                day_record.attendance_status = att_status
 
         await db.flush()
 

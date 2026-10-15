@@ -57,7 +57,7 @@ class AttendanceDay(Base):
     first_check_in_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     last_check_out_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     worked_minutes: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    attendance_status: Mapped[str] = mapped_column(String(20), nullable=False)  # PRESENT, INCOMPLETE, ABSENT, ON_LEAVE, HOLIDAY
+    attendance_status: Mapped[str] = mapped_column(String(20), nullable=False)  # PRESENT, HALF_DAY, INCOMPLETE, ABSENT, ON_LEAVE, HOLIDAY, REMOTE
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
     __table_args__ = (
