@@ -95,7 +95,7 @@ async def create_payroll_period(
 @router.get("/periods", response_model=List[PayrollPeriodResponse])
 async def list_payroll_periods(
     db: AsyncSession = Depends(get_db),
-    _ = Depends(require_roles(["HR", "ADMIN"]))
+    _ = Depends(require_roles(["HR", "ADMIN", "MANAGER", "EMPLOYEE"]))
 ):
     """List all payroll periods"""
     stmt = select(PayrollPeriod).order_by(PayrollPeriod.period_year.desc(), PayrollPeriod.period_month.desc())
@@ -186,7 +186,7 @@ async def get_my_payslips(
         .where(
             and_(
                 PayrollLine.employee_id == current_user.employee_id,
-                PayrollPeriod.status.in_(["APPROVED", "CLOSED"])
+                PayrollPeriod.status.in_(["CALCULATED", "APPROVED", "CLOSED"])
             )
         )
         .order_by(PayrollLine.calculated_at.desc())
