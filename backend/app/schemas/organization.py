@@ -61,6 +61,7 @@ class EmployeeBase(BaseModel):
     employment_status: str = "ACTIVE"
     hire_date: date
     termination_date: Optional[date] = None
+    dependent_count: int = Field(default=0, ge=0, description="Số người phụ thuộc giảm trừ gia cảnh")
 
 
 class EmployeeCreate(EmployeeBase):
@@ -99,6 +100,7 @@ class EmployeeUpdate(BaseModel):
     employment_status: Optional[str] = None
     hire_date: Optional[date] = None
     termination_date: Optional[date] = None
+    dependent_count: Optional[int] = Field(default=None, ge=0, description="Số người phụ thuộc giảm trừ gia cảnh")
 
     new_password: Optional[str] = Field(default=None, min_length=8, max_length=72, repr=False)
     role_code: Optional[str] = Field(default=None, description="Role cập nhật: ADMIN, HR, MANAGER, EMPLOYEE, KIOSK")
