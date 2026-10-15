@@ -313,14 +313,14 @@ export const AttendancePage: React.FC = () => {
                       dataIndex: 'attendance_status',
                       key: 'attendance_status',
                       render: (status) => {
-                        let color = 'default';
-                        if (status === 'PRESENT') color = 'success';
+                        if (status === 'PRESENT') return <Tag color="success">Đủ công (1.0)</Tag>;
+                        else if (status === 'HALF_DAY') return <Tag color="blue">Nửa công (0.5)</Tag>;
                         else if (status === 'REMOTE') return <Tag color="cyan">Làm việc từ xa (REMOTE)</Tag>;
-                        else if (status === 'INCOMPLETE') color = 'warning';
-                        else if (status === 'ON_LEAVE') color = 'processing';
-                        else if (status === 'HOLIDAY') color = 'purple';
-                        else if (status === 'ABSENT') color = 'error';
-                        return <Tag color={color}>{status}</Tag>;
+                        else if (status === 'INCOMPLETE') return <Tag color="warning">Chưa đủ công</Tag>;
+                        else if (status === 'ON_LEAVE') return <Tag color="processing">Nghỉ phép</Tag>;
+                        else if (status === 'HOLIDAY') return <Tag color="purple">Nghỉ lễ</Tag>;
+                        else if (status === 'ABSENT') return <Tag color="error">Vắng</Tag>;
+                        return <Tag>{status}</Tag>;
                       },
                     },
                     {
@@ -392,7 +392,7 @@ export const AttendancePage: React.FC = () => {
                         const hasPending = dayFixes.some((f) => f.status === 'PENDING');
                         const hasRejected = dayFixes.some((f) => f.status === 'REJECTED');
 
-                        if (record.attendance_status === 'INCOMPLETE' && !hasPending) {
+                        if ((record.attendance_status === 'INCOMPLETE' || record.attendance_status === 'HALF_DAY') && !hasPending) {
                           return (
                             <Button size="small" type="link" onClick={() => openQuickFix(record)}>
                               {hasRejected ? 'Giải trình lại' : 'Giải trình bổ sung'}

@@ -185,45 +185,73 @@ class PayrollService:
                 )
             ).options(selectinload(LeaveRequest.leave_type))
             approved_leaves = (await db.execute(stmt_leaves)).scalars().all()
-            paid_leave_days = sum(l.leave_days for l in approved_leaves if l.leave_type.is_paid)
+            # [FIX #1] Build per-date leave credit dict to prevent double-dipping.
+            # For each date, aggregate paid leave days (e.g., 0.5 for half-day, 1.0 for full-day).
+            leave_credit_by_date: Dict[date, Decimal] = {}
+            for lv in approved_leaves:
+                if lv.leave_type.is_paid:
+                    leave_credit_by_date[lv.leave_date] = (
+                        leave_credit_by_date.get(lv.leave_date, Decimal("0.0")) + Decimal(str(lv.leave_days))
+                    )
 
-            # Calculate actual paid days
+            # [FIX #1] Calculate actual paid days with integrated per-day credit.
+            # Each weekday is capped at max 1.0 to prevent double-counting
+            # when employee has both attendance scan and approved leave on the same day.
             actual_paid_days = Decimal("0.0")
             for d in all_dates:
                 if d.weekday() >= 5:
                     continue  # Weekend
-                
+
                 # Check holiday
                 if d in holiday_dates:
                     actual_paid_days += Decimal("1.0")
                     continue
 
+                day_work_credit = Decimal("0.0")
                 att = att_days.get(d)
-                if att and att.attendance_status == "PRESENT":
-                    actual_paid_days += Decimal("1.0")
-                elif att and att.attendance_status in ("ON_LEAVE", "REMOTE"):
-                    # Leave/Remote count will be added from paid leaves sum
-                    pass
+                if att:
+                    if att.attendance_status == "PRESENT":
+                        day_work_credit = Decimal("1.0")
+                    elif att.attendance_status == "HALF_DAY":
+                        day_work_credit = Decimal("0.5")
 
-            actual_paid_days += Decimal(str(paid_leave_days))
+                day_leave_credit = leave_credit_by_date.get(d, Decimal("0.0"))
+                # Maximum credit for a single calendar work day is capped at 1.0
+                day_total_credit = min(Decimal("1.0"), day_work_credit + day_leave_credit)
+                actual_paid_days += day_total_credit
+
             actual_paid_days = min(actual_paid_days, standard_days_dec)
 
             # Pro-rated gross salary calculation
             daily_rate = base_salary / standard_days_dec if standard_days_dec > 0 else Decimal("0.00")
             earned_base = (daily_rate * actual_paid_days).quantize(Decimal("1.00"), rounding=ROUND_HALF_UP)
-            gross_salary = earned_base + allowance
+
+            # [FIX #6] Pro-rate allowance based on actual work days instead of paying 100% unconditionally.
+            # Employees who work partial months should receive proportional allowance.
+            if standard_days_dec > 0:
+                prorated_allowance = (allowance * actual_paid_days / standard_days_dec).quantize(
+                    Decimal("1.00"), rounding=ROUND_HALF_UP
+                )
+            else:
+                prorated_allowance = Decimal("0.00")
+            gross_salary = earned_base + prorated_allowance
 
             # Insurance & PIT
             bhxh, bhyt, bhtn, total_ins = PayrollService.calculate_insurance(gross_salary)
-            taxable_inc, pit_tax = PayrollService.calculate_pit_tax(gross_salary, total_ins)
+            # [FIX #7] Pass employee's dependent_count for proper PIT dependent deduction.
+            # Falls back to 0 if the column hasn't been added via migration yet.
+            emp_dependent_count = getattr(emp, 'dependent_count', 0) or 0
+            taxable_inc, pit_tax = PayrollService.calculate_pit_tax(gross_salary, total_ins, emp_dependent_count)
             net_salary = max(Decimal("0.00"), gross_salary - total_ins - pit_tax)
 
             calc_details = {
                 "base_monthly_salary": float(base_salary),
                 "fixed_allowance": float(allowance),
+                "prorated_allowance": float(prorated_allowance),
                 "daily_rate": float(daily_rate),
                 "standard_work_days": float(standard_days_dec),
                 "actual_work_days": float(actual_paid_days),
+                "dependent_count": emp_dependent_count,
                 "bhxh_amount": float(bhxh),
                 "bhyt_amount": float(bhyt),
                 "bhtn_amount": float(bhtn),
@@ -240,7 +268,7 @@ class PayrollService:
                 currency_code=active_comp.currency_code,
                 standard_work_days=standard_days_dec,
                 actual_work_days=actual_paid_days,
-                allowance_amount=allowance,
+                allowance_amount=prorated_allowance,
                 overtime_amount=Decimal("0.00"),
                 deduction_amount=Decimal("0.00"),
                 gross_salary=gross_salary,
@@ -252,11 +280,20 @@ class PayrollService:
                 calculation_details=calc_details,
                 calculated_at=datetime.now(timezone.utc)
             )
-            period.lines.append(line)
+            db.add(line)
 
         period.status = "CALCULATED"
         await db.flush()
-        return period
+
+        stmt_reload = (
+            select(PayrollPeriod)
+            .where(PayrollPeriod.payroll_period_id == period.payroll_period_id)
+            .options(
+                selectinload(PayrollPeriod.lines).selectinload(PayrollLine.employee).selectinload(Employee.department),
+                selectinload(PayrollPeriod.lines).selectinload(PayrollLine.employee).selectinload(Employee.position)
+            )
+        )
+        return (await db.execute(stmt_reload)).scalar_one()
 
     @staticmethod
     async def export_payroll_excel(db: AsyncSession, period_id: int) -> io.BytesIO:
@@ -272,7 +309,7 @@ class PayrollService:
         period = (await db.execute(stmt)).scalar_one_or_none()
         if not period:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Payroll period not found")
-        if period.status not in {"APPROVED", "CLOSED"}:
+        if period.status not in {"CALCULATED", "APPROVED", "CLOSED"}:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Payroll report unavailable")
 
         wb = openpyxl.Workbook()
