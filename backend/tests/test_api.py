@@ -310,35 +310,48 @@ async def test_google_login_unverified_email(mock_verify):
 @pytest.mark.asyncio
 @patch("app.api.v1.endpoints.auth.id_token.verify_oauth2_token")
 async def test_google_login_success(mock_verify):
-    """Verify Google login for an existing account within the school's domain."""
+    """Verify Google SSO for an existing school-domain account without polluting test data."""
     from app.core.database import AsyncSessionLocal
     from app.models.auth import UserAccount
     from app.models.organization import Employee, Department, Position
     from sqlalchemy import select, delete
+
     email = f"google-test-{secrets.token_hex(4)}@fsb.edu.vn"
     async with AsyncSessionLocal() as db:
         department = (await db.scalars(select(Department))).first()
         position = (await db.scalars(select(Position))).first()
-        employee = Employee(employee_code=email.split("@")[0], full_name="Google SSO Test", email=email,
-            department_id=department.department_id, position_id=position.position_id,
-            hire_date=date(2026, 1, 1), employment_status="ACTIVE")
+        employee = Employee(
+            employee_code=email.split("@")[0],
+            full_name="Google SSO Test",
+            email=email,
+            department_id=department.department_id,
+            position_id=position.position_id,
+            hire_date=date(2026, 1, 1),
+            employment_status="ACTIVE",
+        )
         db.add(employee)
         await db.flush()
         employee_id = employee.employee_id
-        account = UserAccount(employee_id=employee_id, login_email=email, password_hash="unused-test-hash", is_active=True)
+        account = UserAccount(
+            employee_id=employee_id,
+            login_email=email,
+            password_hash="unused-test-hash",
+            is_active=True,
+        )
         db.add(account)
         await db.commit()
         account_id = account.user_account_id
+
     mock_verify.return_value = {"email": email, "email_verified": True}
     settings.GOOGLE_CLIENT_ID = "mock_client_id"
-
     try:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-            response = await ac.post("/api/v1/auth/login/google", json={"id_token": "valid_token_all_good"})
-
+            response = await ac.post(
+                "/api/v1/auth/login/google",
+                json={"id_token": "valid_token_all_good"},
+            )
         assert response.status_code == 200
-        data = response.json()
-        assert "access_token" in data
+        assert "access_token" in response.json()
     finally:
         async with AsyncSessionLocal() as db:
             await db.execute(delete(UserAccount).where(UserAccount.user_account_id == account_id))
@@ -349,8 +362,12 @@ async def test_google_login_success(mock_verify):
 @pytest.mark.asyncio
 @patch("app.api.v1.endpoints.auth.id_token.verify_oauth2_token")
 async def test_google_login_rejects_non_school_domain(mock_verify):
+    """A verified Google identity outside fsb.edu.vn must be denied."""
     mock_verify.return_value = {"email": "admin@hrgroup3.com", "email_verified": True}
     settings.GOOGLE_CLIENT_ID = "mock_client_id"
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        response = await ac.post("/api/v1/auth/login/google", json={"id_token": "verified_wrong_domain"})
+        response = await ac.post(
+            "/api/v1/auth/login/google",
+            json={"id_token": "verified_wrong_domain"},
+        )
     assert response.status_code == 403
