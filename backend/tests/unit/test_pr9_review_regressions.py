@@ -53,6 +53,52 @@ async def test_name_first_request_never_drafts_for_current_employee(monkeypatch,
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("message", [
+    "Xin nghỉ ngày mai cho Nguyễn Văn An",
+    "Tạo đơn nghỉ ngày mai cho nguyen van an",
+    "Xin nghỉ ngày mai cho Minh",
+    "Tôi muốn xin nghỉ cho chị Lê Thu Hà",
+    "Tạo giải trình hôm qua cho nhân viên EMP002",
+])
+async def test_suffix_employee_target_never_drafts_for_actor(monkeypatch, enabled, message):
+    from app.ai import orchestrator as route
+
+    monkeypatch.setattr(settings, "GEMINI_ENABLED", enabled)
+    monkeypatch.setattr(settings, "GEMINI_SEMANTIC_ENABLED", False)
+    employee_lookup = AsyncMock(return_value=AIChatResponse(
+        reply="Cần xác nhận nhân viên", status="NEEDS_INPUT", message_code="EMPLOYEE_QUERY_REQUIRED"))
+    monkeypatch.setattr(route, "answer_employee_query", employee_lookup)
+    start = AsyncMock(side_effect=AssertionError("A third-party request must not draft for SELF"))
+    monkeypatch.setattr(AIService, "_start_draft", start)
+
+    result = await ChatOrchestrator.process_chat(
+        AsyncMock(), 7, AIChatRequest(message=message), {"EMPLOYEE"}, 9, actor())
+    assert result.message_code == "EMPLOYEE_QUERY_REQUIRED"
+    employee_lookup.assert_awaited_once()
+    start.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_semantic_misclassified_self_cannot_draft_for_named_employee(monkeypatch):
+    from app.ai import semantic_router
+    from app.ai.parsing.intent import ChatPlan
+
+    monkeypatch.setattr(settings, "GEMINI_ENABLED", True)
+    monkeypatch.setattr(settings, "GEMINI_SEMANTIC_ENABLED", True)
+    monkeypatch.setattr(semantic_router, "interpret_chat_request", AsyncMock(
+        return_value=ChatPlan(intent="DRAFT_LEAVE", target="SELF")))
+    start = AsyncMock(side_effect=AssertionError("Must reject a conflicting employee"))
+    monkeypatch.setattr(AIService, "_start_draft", start)
+
+    result = await ChatOrchestrator.process_chat(
+        AsyncMock(), 7, AIChatRequest(message="Tôi muốn xin nghỉ cho Nguyễn Văn An"),
+        {"EMPLOYEE"}, 9, actor())
+    assert result.message_code == "TARGET_CONFLICT"
+    start.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("message", ["Xin nghỉ ngày mai", "Tôi muốn xin nghỉ ngày mai", "Vui lòng giúp tôi tạo giải trình hôm qua"])
 async def test_self_and_bare_draft_commands_still_work(monkeypatch, message):
     monkeypatch.setattr(settings, "GEMINI_ENABLED", False)
