@@ -185,7 +185,11 @@ class PayrollService:
                 )
             ).options(selectinload(LeaveRequest.leave_type))
             approved_leaves = (await db.execute(stmt_leaves)).scalars().all()
-            paid_leave_days = sum(l.leave_days for l in approved_leaves if l.leave_type.is_paid)
+            # Group approved paid leaves by date
+            paid_leaves_by_date = {}
+            for l in approved_leaves:
+                if l.leave_type.is_paid:
+                    paid_leaves_by_date[l.leave_date] = paid_leaves_by_date.get(l.leave_date, Decimal("0.0")) + Decimal(str(l.leave_days))
 
             # Calculate actual paid days
             actual_paid_days = Decimal("0.0")
@@ -198,14 +202,19 @@ class PayrollService:
                     actual_paid_days += Decimal("1.0")
                     continue
 
+                day_work_credit = Decimal("0.0")
                 att = att_days.get(d)
-                if att and att.attendance_status == "PRESENT":
-                    actual_paid_days += Decimal("1.0")
-                elif att and att.attendance_status in ("ON_LEAVE", "REMOTE"):
-                    # Leave/Remote count will be added from paid leaves sum
-                    pass
+                if att:
+                    if att.attendance_status == "PRESENT":
+                        day_work_credit = Decimal("1.0")
+                    elif att.attendance_status == "HALF_DAY":
+                        day_work_credit = Decimal("0.5")
 
-            actual_paid_days += Decimal(str(paid_leave_days))
+                day_leave_credit = paid_leaves_by_date.get(d, Decimal("0.0"))
+                # Maximum credit for a single calendar work day is capped at 1.0
+                day_total_credit = min(Decimal("1.0"), day_work_credit + day_leave_credit)
+                actual_paid_days += day_total_credit
+
             actual_paid_days = min(actual_paid_days, standard_days_dec)
 
             # Pro-rated gross salary calculation

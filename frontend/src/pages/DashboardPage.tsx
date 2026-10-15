@@ -181,8 +181,8 @@ export const DashboardPage: React.FC = () => {
             <div style={{ marginTop: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <Text type="secondary" style={{ fontSize: 12 }}>Trạng thái:</Text>
               {todayRecord ? (
-                <Tag color={todayRecord.attendance_status === 'PRESENT' ? 'success' : 'warning'}>
-                  {todayRecord.attendance_status}
+                <Tag color={todayRecord.attendance_status === 'PRESENT' ? 'success' : todayRecord.attendance_status === 'HALF_DAY' ? 'blue' : 'warning'}>
+                  {todayRecord.attendance_status === 'PRESENT' ? 'Đủ công (1.0)' : todayRecord.attendance_status === 'HALF_DAY' ? 'Nửa công (0.5)' : todayRecord.attendance_status}
                 </Tag>
               ) : (
                 <Tag color="default">NO_RECORD</Tag>
@@ -369,11 +369,15 @@ export const DashboardPage: React.FC = () => {
               key: 'attendance_status',
               render: (status) => {
                 let color = 'default';
-                if (status === 'PRESENT') color = 'success';
-                else if (status === 'INCOMPLETE') color = 'warning';
-                else if (status === 'ON_LEAVE') color = 'processing';
-                else if (status === 'HOLIDAY') color = 'purple';
-                return <Tag color={color}>{status}</Tag>;
+                let text = status;
+                if (status === 'PRESENT') { color = 'success'; text = 'Đủ công (1.0)'; }
+                else if (status === 'HALF_DAY') { color = 'blue'; text = 'Nửa công (0.5)'; }
+                else if (status === 'REMOTE') { color = 'cyan'; text = 'Làm từ xa (REMOTE)'; }
+                else if (status === 'INCOMPLETE') { color = 'warning'; text = 'Chưa đủ công'; }
+                else if (status === 'ON_LEAVE') { color = 'processing'; text = 'Nghỉ phép'; }
+                else if (status === 'HOLIDAY') { color = 'purple'; text = 'Nghỉ lễ'; }
+                else if (status === 'ABSENT') { color = 'error'; text = 'Vắng'; }
+                return <Tag color={color}>{text}</Tag>;
               },
             },
           ]}
