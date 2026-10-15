@@ -109,6 +109,38 @@ async def test_self_and_bare_draft_commands_still_work(monkeypatch, message):
 
 
 @pytest.mark.asyncio
+async def test_ai_report_setup_catalog_and_creation_keep_admin_scope(monkeypatch):
+    import json
+    from app.api.v1.endpoints import ai
+    from app.core.authorization import ai_scope_context
+    from app.services.report_service import ReportService
+
+    user = actor("HR")
+    # The AI admin disables team/company scopes, but ordinary HR reports stay unchanged.
+    with ai_scope_context({"HR": {"SELF"}}):
+        catalog = await ai.get_scoped_report_catalog(current_user=user, _policy=None)
+        reports = json.loads(catalog.body)["reports"]
+        assert reports and all(row["scopes"] == ["SELF"] for row in reports)
+        with pytest.raises(HTTPException) as denied:
+            await ReportService.visible_employee_ids(None, user, "ATTENDANCE",
+                                                     "COMPANY", None)
+        assert denied.value.status_code == 403
+
+        # In-chat creation forwards the original scope; the real report service
+        # performs final authorization under the same dependency context.
+        async def check_scope(_db, actual_user, req):
+            await ReportService.visible_employee_ids(None, actual_user, req.kind,
+                                                     req.scope, None)
+        monkeypatch.setattr(runs.ReportRunService, "create", check_scope)
+        with pytest.raises(HTTPException) as denied:
+            await ai.create_scoped_report_run(ReportRunCreate(
+                kind="ATTENDANCE", scope="COMPANY",
+                start_date="2026-10-01", end_date="2026-10-15",
+            ), AsyncMock(), user, None)
+        assert denied.value.status_code == 403
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("message,field,value", [
     ("Đổi ngày kết thúc sang 2026-10-20", "end_date", "2026-10-20"),
     ("Đổi ngày bắt đầu sang 2026-10-05", "start_date", "2026-10-05"),
