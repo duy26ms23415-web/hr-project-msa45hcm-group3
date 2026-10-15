@@ -1,5 +1,6 @@
 /** Pure UI decisions; server authorization and draft ownership remain authoritative. */
 import type { AISuggestion } from '../types/ai';
+import type { ReportKind } from '../types/reports';
 
 export function actorChanged(previous?: number, current?: number): boolean {
   return previous !== current;
@@ -12,6 +13,18 @@ export function readableISODate(value: string): string {
   return parsed.getUTCFullYear() === year && parsed.getUTCMonth() + 1 === month && parsed.getUTCDate() === day
     ? `${String(day).padStart(2, '0')}/${String(month).padStart(2, '0')}/${year}` : value;
 }
+/** Validate the prefilled period before submitting a report outside chat. */
+export function reportPeriodValid(kind: ReportKind, start: string, end: string): boolean {
+  const validDate = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value) && readableISODate(value) !== value;
+  if (!validDate(start) || !validDate(end) || start > end || start.slice(0, 4) !== end.slice(0, 4)) return false;
+  if (kind === 'MY_PAYSLIP' || kind === 'PAYROLL_SUMMARY') {
+    const lastDay = new Date(Date.UTC(Number(start.slice(0, 4)), Number(start.slice(5, 7)), 0)).getUTCDate();
+    return start.endsWith('-01') && start.slice(0, 7) === end.slice(0, 7)
+      && Number(end.slice(-2)) === lastDay;
+  }
+  return true;
+}
+
 export function chatFailureState(status?: number, code?: string) {
   return {
     clearDraft: status === 404 && code === 'AI_DRAFT_NOT_FOUND'
