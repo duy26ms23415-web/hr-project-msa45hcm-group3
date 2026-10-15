@@ -6,7 +6,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
-from app.ai.providers.gemini import ProviderFailure, generate_search_answer, record
+from app.ai.providers.gemini import ProviderFailure, budgeted_timeout, generate_search_answer, record
 from app.core.config import settings
 from app.schemas.ai import AIChatResponse, AIExternalSource
 
@@ -23,32 +23,87 @@ def official_url(value):
         return False
 
 
-async def source_url(uri):
-    if official_url(uri):
-        return uri
-    # Google grounding uses opaque redirect links. Resolve only Google's known
-    # redirect service; never fetch model-selected arbitrary hosts or a target URL.
+_REDIRECT_TIMEOUT_SECONDS = 5.0
+
+
+def google_redirect(uri):
+    """Only Google's own grounding redirect service may be contacted."""
     try:
         parsed = urlsplit(uri)
-        if (parsed.scheme != "https" or parsed.hostname != "vertexaisearch.cloud.google.com"
-                or not parsed.path.startswith("/grounding-api-redirect/") or parsed.username
-                or parsed.password or parsed.port not in {None, 443}):
-            return None
-        async with httpx.AsyncClient(timeout=5, follow_redirects=False, trust_env=False) as client:
-            response = await client.get(uri)
+        return bool(parsed.scheme == "https" and parsed.hostname == "vertexaisearch.cloud.google.com"
+                    and parsed.path.startswith("/grounding-api-redirect/") and not parsed.username
+                    and not parsed.password and parsed.port in {None, 443})
+    except (TypeError, ValueError):
+        return False
+
+
+async def _redirect_target(client, uri):
+    # Read the Location header only; never fetch the model-selected target.
+    try:
+        response = await client.get(uri)
         location = response.headers.get("location", "")
         return location if response.is_redirect and official_url(location) else None
     except (httpx.HTTPError, ValueError, TypeError):
         return None
 
 
-# Common Vietnamese surnames, accented and unaccented ("Nguyen Van A"). The
-# unaccented "Do"/"Ho" are left out: they are ordinary words ("do" = because).
-# This is defence in depth only; public search stays opt-in for that reason.
+async def resolve_source_urls(uris, timeout=_REDIRECT_TIMEOUT_SECONDS):
+    """Map grounding links to official URLs (None where unverifiable).
+
+    All redirect lookups share ONE client and ONE deadline, so the whole step
+    takes at most `timeout`. timeout=None means the request budget is spent:
+    already-official links are kept and no network call is made.
+    """
+    results = [uri if uri and official_url(uri) else None for uri in uris]
+    pending = [i for i, uri in enumerate(uris) if uri and results[i] is None and google_redirect(uri)]
+    if not pending or timeout is None:
+        return results
+    async with httpx.AsyncClient(timeout=timeout, follow_redirects=False, trust_env=False) as client:
+        tasks = {asyncio.create_task(_redirect_target(client, uris[i])): i for i in pending}
+        done, not_done = await asyncio.wait(tasks, timeout=timeout)
+        for task in not_done:
+            task.cancel()
+        if not_done:
+            await asyncio.gather(*not_done, return_exceptions=True)
+        for task in done:
+            results[tasks[task]] = task.result()
+    return results
+
+
+async def source_url(uri, timeout=_REDIRECT_TIMEOUT_SECONDS):
+    """Return an official URL for one grounding link, or None."""
+    return (await resolve_source_urls([uri], timeout))[0]
+
+
+# Best-effort name masking before text leaves for Google Search. This is
+# defence in depth only, never a complete PII control; public search is
+# opt-in for that reason.
+#
+# Rule 1 (case-sensitive): a capitalised surname followed by capitalised
+# words ("Nguyen Van A", "Trần Thị Bình"). The unaccented "Do"/"Ho" are left
+# out: they are ordinary words ("do" = because).
 _SURNAMES = ("Nguyễn|Trần|Lê|Phạm|Hoàng|Huỳnh|Phan|Vũ|Võ|Đặng|Bùi|Đỗ|Hồ|Ngô|Dương|Đinh|"
              "Nguyen|Tran|Le|Pham|Hoang|Huynh|Vu|Vo|Dang|Bui|Ngo|Duong|Dinh")
-_PERSON_NAME = re.compile(
+_TITLE_CASE_NAME = re.compile(
     rf"\b(?:{_SURNAMES})\s+[A-ZÀ-ỴĐ][a-zà-ỹđ]*(?:\s+[A-ZÀ-ỴĐ][a-zà-ỹđ]*){{0,2}}\b")
+# Rule 2 (any case: "nguyen van a", "NGUYEN VAN A", "Nguyễn văn an"): a
+# surname that is rarely an ordinary word, then a common middle name. Surnames
+# such as dang/phan/le/vu/bui are excluded here because unaccented they are
+# everyday words (đang, phân, lễ, vụ, bụi) and would mask legal wording.
+_DISTINCT_SURNAMES = "nguyễn|nguyen|trần|tran|phạm|pham|huỳnh|huynh|hoàng|hoang|đặng|bùi|võ|vũ|ngô|dương|đinh|đỗ"
+_MIDDLE_NAMES = ("văn|van|thị|thi|đức|duc|ngọc|ngoc|quốc|quoc|hữu|huu|xuân|xuan|"
+                 "kim|minh|thanh|thu|anh|hồng|hong|bảo|bao|gia|tuấn|tuan")
+# A name ends before a common verb/particle, so "Nguyễn Văn An xin nghỉ" keeps "xin nghỉ".
+_NOT_NAME = ("xin|nghỉ|nghi|có|co|được|duoc|làm|lam|đi|di|đã|da|đang|dang|bị|bi|về|ve|là|la|"
+             "ở|o|muốn|muon|cần|can|hỏi|hoi|nộp|nop|tạo|tao|thì|thi|và|va|của|cua|nghỉ|bao|mấy|may")
+_ANY_CASE_NAME = re.compile(
+    rf"(?<!\w)(?:{_DISTINCT_SURNAMES})\s+(?:{_MIDDLE_NAMES})"
+    rf"(?:\s+(?!(?:{_NOT_NAME})(?!\w))[^\W\d_]+){{1,2}}(?!\w)",
+    re.IGNORECASE)
+
+
+def mask_person_names(value: str) -> str:
+    return _TITLE_CASE_NAME.sub("[person]", _ANY_CASE_NAME.sub("[person]", value))
 
 
 def public_question(message):
@@ -56,7 +111,7 @@ def public_question(message):
     value = re.sub(r"\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b", "[email]", message)
     value = re.sub(r"(?<!\w)(?:\+?84|0)(?:[ .-]?\d){9}(?!\d)", "[phone]", value)
     value = re.sub(r"\b(?:EMP|E)\d+\b", "[employee]", value, flags=re.IGNORECASE)
-    value = _PERSON_NAME.sub("[person]", value)
+    value = mask_person_names(value)
     return value[:2000]
 
 
@@ -84,8 +139,11 @@ async def answer_public_question(question, today):
         if not text or metadata is None or finish_reason != "STOP":
             return None
         chunks = (metadata.grounding_chunks or [])[:8]
-        links = await asyncio.gather(*(source_url(chunk.web.uri) if chunk.web and chunk.web.uri
-                                       else _empty_link() for chunk in chunks))
+        # Lookups run in parallel and share what is left of the chat budget, so
+        # citation checks cannot push the request past its hard timeout.
+        links = await resolve_source_urls(
+            [chunk.web.uri if chunk.web else None for chunk in chunks],
+            budgeted_timeout(_REDIRECT_TIMEOUT_SECONDS))
         sources, source_indices, lines = [], {}, []
         for support in metadata.grounding_supports or []:
             segment = support.segment
@@ -125,7 +183,3 @@ async def answer_public_question(question, today):
             reply="Hiện chưa thể hoàn tất tra cứu để trả lời câu hỏi này. Bạn vui lòng thử lại sau hoặc liên hệ HR để được hỗ trợ.",
             status="UNAVAILABLE", message_code=f"PUBLIC_SEARCH_{exc.category}",
         )
-
-
-async def _empty_link():
-    return None

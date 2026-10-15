@@ -48,7 +48,9 @@ class Settings(BaseSettings):
     GEMINI_INTENT_TIMEOUT_SECONDS: float = Field(default=15, ge=5, le=30)
     GEMINI_POLICY_TIMEOUT_SECONDS: float = Field(default=15, ge=5, le=30)
     GEMINI_PUBLIC_SEARCH_ENABLED: bool = False
-    GEMINI_PUBLIC_SEARCH_TIMEOUT_SECONDS: float = Field(default=10, ge=5, le=25)
+    # Upper bound kept at 45 so existing deployments still start; the shared
+    # chat budget (budgeted_timeout) caps the effective value per request.
+    GEMINI_PUBLIC_SEARCH_TIMEOUT_SECONDS: float = Field(default=10, ge=5, le=45)
     # Total wall-clock budget for one chat request, shared by all provider calls.
     AI_CHAT_TIMEOUT_SECONDS: float = Field(default=30, ge=10, le=60)
     AI_KNOWLEDGE_STORAGE_DIR: Path = Path(__file__).resolve().parents[2] / "storage" / "private" / "ai-knowledge"
