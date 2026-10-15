@@ -350,40 +350,22 @@ export const EmployeesPage: React.FC = () => {
                 <div style={{ overflowWrap: 'anywhere' }}>
                   <div style={{ fontWeight: 600 }}>{record.full_name}</div>
                   <Text type="secondary" style={{ fontSize: 12 }}>{record.employee_code}</Text>
+                  {compactTable && (
+                    <Tooltip title={record.email}>
+                      <div style={{ fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 108 }}>
+                        {record.email}
+                      </div>
+                    </Tooltip>
+                  )}
                 </div>
               ),
             },
-            ...(isAdmin ? [{
-              title: 'Thao tác',
-              key: 'edit_employee',
-              width: 210,
-              render: (_: unknown, record: Employee) => (
-                <Space wrap>
-                <Button size="small" icon={<EditOutlined />} onClick={() => {
-                  editForm.resetFields();
-                  editForm.setFieldsValue({
-                    ...record,
-                    hire_date: dayjs(record.hire_date),
-                    role_code: record.roles?.[0] || 'EMPLOYEE',
-                    new_password: undefined,
-                    confirm_password: undefined,
-                  });
-                  setEditingEmployee(record);
-                }}>
-                  Cập nhật nhân viên
-                </Button>
-                {record.has_login_account && !DEMO_EMAILS.has(record.email.toLowerCase()) && (
-                  <Button size="small" danger icon={<DeleteOutlined />} onClick={() => confirmDeleteAccount(record)}>
-                    Xóa tài khoản
-                  </Button>
-                )}
-                </Space>
-              ),
-            }] : []),
             {
               title: 'Email',
               dataIndex: 'email',
               key: 'email',
+              fixed: 'left',
+              responsive: ['md'],
               width: 260,
             },
             {
@@ -465,7 +447,6 @@ export const EmployeesPage: React.FC = () => {
               title: 'Thẻ QR',
               key: 'qr_card',
               width: compactTable ? 56 : 150,
-              fixed: 'right',
               render: (_, record) => (
                 <Tooltip title={`Xem thẻ QR: ${record.full_name} (${record.employee_code})`}>
                 <Button
@@ -480,6 +461,33 @@ export const EmployeesPage: React.FC = () => {
                 </Tooltip>
               ),
             },
+            ...(isAdmin ? [{
+              title: 'Thao tác',
+              key: 'edit_employee',
+              width: 210,
+              render: (_: unknown, record: Employee) => (
+                <Space wrap>
+                <Button size="small" icon={<EditOutlined />} onClick={() => {
+                  editForm.resetFields();
+                  editForm.setFieldsValue({
+                    ...record,
+                    hire_date: dayjs(record.hire_date),
+                    role_code: record.roles?.[0] || 'EMPLOYEE',
+                    new_password: undefined,
+                    confirm_password: undefined,
+                  });
+                  setEditingEmployee(record);
+                }}>
+                  Cập nhật nhân viên
+                </Button>
+                {record.has_login_account && !DEMO_EMAILS.has(record.email.toLowerCase()) && (
+                  <Button size="small" danger icon={<DeleteOutlined />} onClick={() => confirmDeleteAccount(record)}>
+                    Xóa tài khoản
+                  </Button>
+                )}
+                </Space>
+              ),
+            }] : []),
           ]}
         />
       </Card>
