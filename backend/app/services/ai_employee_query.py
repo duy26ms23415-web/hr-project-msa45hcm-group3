@@ -37,7 +37,22 @@ def mentions_employee(message):
     first-person evidence independently, so a missed name cannot default to self.
     """
     text = normalize(message)
-    return bool(employee_codes(message) or re.search(
+    # A third-party beneficiary can be named AFTER a draft command, e.g.
+    # "Xin nghỉ ngày mai cho Nguyễn Văn An". Never reinterpret it as SELF.
+    beneficiary = re.search(
+        r"\b(?:cho|ho|giup)\s+"
+        r"(?:(?:anh|chi|ong|ba|ban)\s+)?"
+        r"(?:(?:nhan vien|dong nghiep|nguoi khac)\b"
+        r"|(?:nguyen|tran|le|pham|hoang|huynh|phan|vu|vo|dang|bui|do|ho|ngo|duong|dinh)\s+[a-z]+\b"
+        r"|(?:anh|chi|ong|ba|ban)\b)", text,
+    )
+    # Recognize a capitalized short name ("cho Minh") without treating ordinary
+    # reasons ("cho con đi khám") or "cho tôi" as another employee.
+    capitalized_beneficiary = re.search(
+        r"\b(?:cho|hộ|giúp)\s+(?!Tôi\b|Mình\b|Bạn\b|Con\b)"
+        r"[A-ZÀ-ỴĐ][a-zà-ỹđ]{1,}\b", message,
+    )
+    return bool(beneficiary or capitalized_beneficiary or employee_codes(message) or re.search(
         r"\b(?:employee[_ ]?id|nhan vien\s+(?:id|ma|\d+)\b"
         r"|cua (?:nhan vien|nguoi khac|anh|chi|ban(?! than\b))\b"
         r"|(?:phep|nghi|cong|luong) cua (?!toi\b|minh\b|ban than\b|nhom\b|toan cong ty\b)\w+)", text))
