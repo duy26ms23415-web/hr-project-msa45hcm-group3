@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   Card,
+  Grid,
+  Tooltip,
   Table,
   Button,
   Tag,
@@ -35,6 +37,8 @@ const DEMO_EMAILS = new Set(['admin@hrgroup3.com', 'manager@hrgroup3.com', 'empl
 
 export const EmployeesPage: React.FC = () => {
   const { hasRole } = useAuth();
+  const screens = Grid.useBreakpoint();
+  const compactTable = !screens.md;
   const isAdmin = hasRole(['ADMIN']);
   const isAdminOrHR = hasRole(['ADMIN', 'HR']);
 
@@ -337,6 +341,18 @@ export const EmployeesPage: React.FC = () => {
           loading={loading}
           locale={{ emptyText: 'Không có nhân viên phù hợp với bộ lọc trong phạm vi quản lý.' }}
           columns={[
+            {
+              title: 'Nhân viên',
+              key: 'employee_identity',
+              fixed: 'left',
+              width: compactTable ? 140 : 220,
+              render: (_: unknown, record: Employee) => (
+                <div style={{ overflowWrap: 'anywhere' }}>
+                  <div style={{ fontWeight: 600 }}>{record.full_name}</div>
+                  <Text type="secondary" style={{ fontSize: 12 }}>{record.employee_code}</Text>
+                </div>
+              ),
+            },
             ...(isAdmin ? [{
               title: 'Thao tác',
               key: 'edit_employee',
@@ -364,20 +380,6 @@ export const EmployeesPage: React.FC = () => {
                 </Space>
               ),
             }] : []),
-            {
-              title: 'Mã NV',
-              dataIndex: 'employee_code',
-              key: 'employee_code',
-              width: 100,
-              render: (code) => <b>{code}</b>,
-            },
-            {
-              title: 'Họ và tên',
-              dataIndex: 'full_name',
-              key: 'full_name',
-              width: 200,
-              render: (name) => <span style={{ fontWeight: 600 }}>{name}</span>,
-            },
             {
               title: 'Email',
               dataIndex: 'email',
@@ -462,16 +464,20 @@ export const EmployeesPage: React.FC = () => {
             {
               title: 'Thẻ QR',
               key: 'qr_card',
-              width: 150,
+              width: compactTable ? 56 : 150,
+              fixed: 'right',
               render: (_, record) => (
+                <Tooltip title={`Xem thẻ QR: ${record.full_name} (${record.employee_code})`}>
                 <Button
                   size="small"
                   icon={<QrcodeOutlined />}
+                  aria-label={`Xem thẻ QR: ${record.full_name} (${record.employee_code})`}
                   onClick={() => handleViewQR(record)}
                   style={{ borderRadius: 6 }}
                 >
-                  Xem thẻ QR
+                  {compactTable ? null : 'Xem thẻ QR'}
                 </Button>
+                </Tooltip>
               ),
             },
           ]}
