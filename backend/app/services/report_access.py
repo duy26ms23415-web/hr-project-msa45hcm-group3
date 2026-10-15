@@ -8,6 +8,7 @@ from app.models.knowledge import ReportRun
 from app.services.report_service import ReportService
 from app.services.report_storage import delete_report
 from app.services.ai_access import require_reviewer_role, user_roles
+from app.services.ai_request_security import note_data_scope
 
 
 async def authorized_run(db, user, run_id):
@@ -40,4 +41,5 @@ async def authorized_run(db, user, run_id):
         raise HTTPException(404, "REPORT_UNAVAILABLE") from exc
     if not set(run.scope_snapshot).issubset(set(current_ids)):
         raise HTTPException(404, "REPORT_UNAVAILABLE")
+    note_data_scope(run.scope)
     return run

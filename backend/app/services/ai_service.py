@@ -67,7 +67,9 @@ class AIService:
         field = "leave_date" if command == "DRAFT_LEAVE" else "work_date"
         collecting_date = not missing_fields or missing_fields[0] == field
         if collecting_date and field not in answers and not (inputs and field in inputs):
-            resolution = await resolve_date(message, business_today(), DateContext(field))
+            reason = draft_reason_match(message)
+            date_message = message[:reason.start()] if reason else message
+            resolution = await resolve_date(date_message, business_today(), DateContext(field))
             if resolution_out is not None:
                 resolution_out["date"] = resolution
             if resolution.status == "RESOLVED":

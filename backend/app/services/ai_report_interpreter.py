@@ -39,8 +39,12 @@ def report_answers(message, today, params=None, missing=()):
     dates = re.findall(r"\b\d{4}-\d{2}-\d{2}\b", message)
     if len(dates) == 2:
         answers.update(start_date=dates[0], end_date=dates[1])
-    elif len(dates) == 1 and missing:
-        field = next((key for key in missing if key in {"start_date", "end_date"}), None)
+    elif len(dates) == 1:
+        start_requested = bool(re.search(r"\b(?:ngay bat dau|tu ngay|start date)\b", text))
+        end_requested = bool(re.search(r"\b(?:ngay ket thuc|den ngay|end date)\b", text))
+        field = ("start_date" if start_requested else "end_date") if start_requested != end_requested else None
+        if not start_requested and not end_requested:
+            field = next((key for key in missing if key in {"start_date", "end_date"}), None)
         if field:
             answers[field] = dates[0]
     else:
@@ -122,7 +126,7 @@ class GeminiReportInterpreter:
         local = report_answers(message, today, current)
         text = normalize(message)
         # Common periods, fixed labels and known commands are handled locally.
-        if {"start_date", "end_date"}.issubset(local) or text in {"ban than", "nhan vien truc tiep", "toan cong ty"}:
+        if {"start_date", "end_date"} & local.keys() or text in {"ban than", "nhan vien truc tiep", "toan cong ty"}:
             record("interpret_report_filters", "SKIPPED_DETERMINISTIC")
             return {}
         if local.get("kind") and not re.search(r"\b(tuan|quy|nam truoc|tu ngay|hom qua|hom nay)\b", text):

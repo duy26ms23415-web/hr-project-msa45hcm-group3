@@ -1,6 +1,8 @@
 """Owner-bound report tools; Python parses common filters, Gemini supplies typed hints."""
 from sqlalchemy import select
 from datetime import datetime, timezone
+from calendar import monthrange
+from datetime import date
 from uuid import uuid5, NAMESPACE_URL
 from app.services.report_access import authorized_run
 from app.models.knowledge import ReportRun
@@ -52,6 +54,23 @@ def revised_report_params(current, answers):
     params = {**current, **answers}
     if "employee_id" not in answers and ("scope" in answers or params.get("kind") not in {"ATTENDANCE", "LEAVE", "ATTENDANCE_FIX"}):
         params.pop("employee_id", None)
+    kind = params.get("kind")
+    if kind != current.get("kind") and kind in {"MY_PAYSLIP", "PAYROLL_SUMMARY"}:
+        if "scope" not in answers:
+            params["scope"] = "SELF" if kind == "MY_PAYSLIP" else "COMPANY"
+        if kind == "MY_PAYSLIP" and "department_id" not in answers:
+            params.pop("department_id", None)
+        if not {"start_date", "end_date"} & answers.keys():
+            try:
+                start, end = date.fromisoformat(params["start_date"]), date.fromisoformat(params["end_date"])
+                full_month = start.day == 1 and end == start.replace(day=monthrange(start.year, start.month)[1])
+            except (KeyError, ValueError):
+                full_month = False
+            if not full_month:
+                # Ask for a payroll month instead of silently widening the old
+                # period or letting an inherited partial month fail with 422.
+                params.pop("start_date", None)
+                params.pop("end_date", None)
     return params
 
 

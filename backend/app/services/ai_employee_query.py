@@ -17,6 +17,7 @@ from app.services.ai_report_draft_service import AIReportDraftService
 from app.services.ai_knowledge_tool import AIKnowledgeTool
 from app.services.knowledge_retrieval import normalize
 from app.services.report_service import employee_scope
+from app.services.ai_request_security import note_data_scope
 
 
 class EmployeeQuery(BaseModel):
@@ -161,6 +162,7 @@ async def answer_employee_query(db, actor, req, today, *, required=True, interpr
     # A model cannot select a person absent from the actual user request.
     if not name_words(reference) or not re.search(r"(?<!\w)" + re.escape(name_words(reference)) + r"(?!\w)", name_words(req.message)) or len(reference) < 2:
         return clarify()
+    note_data_scope(scope)
     employees = await resolve_employee(db, actor, scope, reference, req.message)
     if not employees:
         candidates = await resolve_employee(db, actor, scope, reference, partial=True)

@@ -218,6 +218,26 @@ class ChatOrchestrator:
 
         draft_leave = any(term in text for term in ["xin nghi", "nghi sang", "nghi chieu", "nghi ca ngay", "tao don nghi", "lap don nghi", "tao phep", "xin lam viec tu xa", "dang ky lam viec tu xa", "xin remote", "xin wfh", "tao don remote", "tao don wfh"])
         draft_fix = any(term in text for term in ["quen quet", "quen cham cong", "quen check-in", "quen check-out", "tao giai trinh", "don giai trinh"]) and "ngay nao" not in text
+        if (draft_leave or draft_fix) and not from_suggestion:
+            # Bare commands and first-person requests can draft for the actor.
+            # A name/unknown subject before the command must not become SELF
+            # merely because semantic routing is disabled or unavailable.
+            prefix = re.split(
+                r"\b(?:xin nghi|nghi sang|nghi chieu|nghi ca ngay|tao don nghi|lap don nghi|tao phep|"
+                r"xin lam viec tu xa|dang ky lam viec tu xa|xin remote|xin wfh|tao don remote|tao don wfh|"
+                r"quen quet|quen cham cong|quen check-in|quen check-out|tao giai trinh|don giai trinh)\b",
+                text, maxsplit=1,
+            )[0].strip()
+            prefix = re.sub(
+                r"\b\d{4}-\d{2}-\d{2}\b|\b\d{1,2}/\d{1,2}(?:/\d{4})?\b|"
+                r"\b(?:hom qua|hom nay|ngay mai|ngay kia|sang mai|chieu mai)\b",
+                "", prefix,
+            ).strip()
+            if not re.fullmatch(r"(?:(?:toi|minh|muon|can|cho|giup|hay|vui long|lam on)\s*)*", prefix):
+                return AIChatResponse(
+                    reply="Tôi chỉ hỗ trợ soạn đơn cho tài khoản đang đăng nhập. Nếu bạn muốn soạn cho bản thân, hãy nói rõ, ví dụ: Tôi muốn xin nghỉ ngày mai.",
+                    status="NEEDS_INPUT", message_code="TARGET_REQUIRED",
+                )
         if owner_user_account_id is not None and db is not None and (draft_leave or draft_fix):
             command = "DRAFT_LEAVE" if draft_leave else "DRAFT_FIX"
             return await AIService._start_draft(db, employee_id, owner_user_account_id, command, req)

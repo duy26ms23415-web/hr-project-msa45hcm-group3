@@ -5,12 +5,14 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.attendance import AttendanceDay
 from app.models.leave import EmployeeLeaveBalance, LeaveType
+from app.services.ai_request_security import note_data_scope
 
 
 class AIEmployeeTool:
     @staticmethod
     async def leave_preflight(db, employee_id, params, today):
         """Check authoritative balance early without guessing a leave type."""
+        note_data_scope("SELF")
         year = date.fromisoformat(params["leave_date"]).year if params.get("leave_date") else today.year
         balance = (await db.execute(select(EmployeeLeaveBalance).where(
             EmployeeLeaveBalance.employee_id == employee_id, EmployeeLeaveBalance.year == year))).scalar_one_or_none()
@@ -30,6 +32,7 @@ class AIEmployeeTool:
 
     @staticmethod
     async def get_context(db: AsyncSession, employee_id: int, today: date, leave_year: int | None = None, attendance_start: date | None = None, attendance_end: date | None = None):
+        note_data_scope("SELF")
         balance = (await db.execute(select(EmployeeLeaveBalance).where(
             EmployeeLeaveBalance.employee_id == employee_id, EmployeeLeaveBalance.year == (leave_year or today.year)
         ))).scalar_one_or_none()

@@ -183,7 +183,6 @@ async def chat_with_hr_ai(
                 )
                 result.request_id = audit["request_id"]
                 audit["command"] = result.action.action_type if result.action else result.answer_mode
-                audit["scope"] = "SELF" if result.draft_id or result.action and result.action.action_type in {"SHOW_DATA", "DRAFT_LEAVE", "DRAFT_FIX"} else "NONE"
                 if result.answer_mode == "OUT_OF_SCOPE":
                     audit["outcome"] = "DENIED" if result.reply.startswith("Bạn không có quyền") else "REJECTED"
                     if audit["outcome"] == "DENIED":

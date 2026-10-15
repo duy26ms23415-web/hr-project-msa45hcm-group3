@@ -42,6 +42,15 @@ OUTCOMES = frozenset(
 _COMMAND_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]{0,49}$")
 _REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,100}$")
 _request_id = ContextVar("ai_request_id", default=None)
+_chat_audit = ContextVar("ai_chat_audit", default=None)
+
+
+def note_data_scope(scope: str) -> None:
+    """Record the authorized scope used by a tool, not the shape of its reply."""
+    audit = _chat_audit.get()
+    order = {"NONE": 0, "SELF": 1, "DIRECT_REPORTS": 2, "COMPANY": 3}
+    if audit is not None and scope in order and order[scope] > order[audit["scope"]]:
+        audit["scope"] = scope
 
 
 def current_request_id() -> str | None:
@@ -227,6 +236,7 @@ async def secured_operation(db, user_id: int, channel: str, action: str, scope="
     request_id = _request_id.get() or uuid4().hex
     token = _request_id.set(request_id)
     metadata = {"scope": scope, "command": command, "outcome": "SUCCESS", "request_id": request_id}
+    chat_token = _chat_audit.set(metadata) if channel == "CHAT" else None
     try:
         if rate_limit:
             await consume_budget(db, user_id, channel, request_id)
@@ -242,4 +252,6 @@ async def secured_operation(db, user_id: int, channel: str, action: str, scope="
         else:
             await record_event(db, user_id, channel, action, metadata["scope"], metadata["outcome"], request_id, metadata["command"])
     finally:
+        if chat_token is not None:
+            _chat_audit.reset(chat_token)
         _request_id.reset(token)
