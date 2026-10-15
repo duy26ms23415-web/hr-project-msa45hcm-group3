@@ -4,6 +4,7 @@ import logging
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import JSONResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import SQLAlchemyError
@@ -22,6 +23,9 @@ from app.models.knowledge import KnowledgeDocument, KnowledgeDocumentVersion, Kn
 from app.services.ai_request_security import secured_operation
 from app.services.ai_suggestions import SUGGESTIONS, section_unavailability, suggestion_allowed, unique_visible_sections
 from app.services.ai_report_draft_service import suggestion_report_defaults
+from app.services.report_catalog import report_catalog
+from app.services.report_run_service import ReportRunService
+from app.schemas.reports import ReportRunCreate, ReportRunCreateResponse
 from app.services.ai_knowledge_tool import AIKnowledgeTool
 from app.services.knowledge_retrieval import retrieve
 
@@ -163,6 +167,26 @@ async def get_suggestions(
             source = suggestion.source
             suggestion.prompt += f" (tham khảo mục {source.section_code} {source.heading}, trang {source.page_start})"
     return suggestions
+
+
+@router.get("/report-catalog")
+async def get_scoped_report_catalog(
+    current_user: UserAccount = Depends(get_current_user),
+    _policy: None = Depends(scoped_ai_access),
+):
+    """Report choices initiated inside the assistant obey administrator AI limits."""
+    return JSONResponse(report_catalog(current_user), headers={"Cache-Control": "private, no-store"})
+
+
+@router.post("/report-runs", response_model=ReportRunCreateResponse, status_code=201)
+async def create_scoped_report_run(
+    req: ReportRunCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
+    _policy: None = Depends(scoped_ai_access),
+):
+    """Create an AI-initiated report without escaping the AI-specific scope."""
+    return await ReportRunService.create(db, current_user, req)
 
 
 @router.post("/chat", response_model=AIChatResponse)
