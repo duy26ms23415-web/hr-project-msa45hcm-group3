@@ -1,3 +1,4 @@
+import calendar
 import hashlib
 import secrets
 from datetime import date, datetime, time, timedelta, timezone
@@ -112,7 +113,19 @@ class AttendanceService:
 
     @staticmethod
     async def record_scan(db: AsyncSession, scan_in: ScanRequest) -> AttendanceEvent:
-        """Process Kiosk Web QR scan event and update day attendance aggregate"""
+        """Process Kiosk Web QR scan event and update day attendance aggregate.
+
+        [FIX #4] SECURITY TODO — Buddy Punching Risk:
+        Current QR tokens are static (permanent per employee card). This allows
+        an employee to share their QR code with a colleague who can scan on their behalf.
+        Recommended mitigations for a future sprint:
+        - TOTP-based dynamic QR: Rotate QR codes every 30-60 seconds via authenticator app
+        - Device binding: Restrict scans to whitelisted kiosk device IDs or IP ranges
+        - Geo-fencing: Validate scan location is within office coordinates
+        - Biometric verification: Integrate face recognition or fingerprint at kiosk
+        The current idempotency key (15-minute window) provides minimal protection
+        but does not prevent a different person from scanning the same QR code.
+        """
         t_hash = hash_token(scan_in.qr_token)
         stmt = select(QRCard).where(
             and_(
@@ -232,6 +245,31 @@ class AttendanceService:
         fix_in: AttendanceFixCreate
     ) -> AttendanceFix:
         """Create a pending attendance fix/justification request"""
+        # [FIX #8] Enforce monthly cap on attendance fix requests.
+        # Maximum 3 approved + pending fix requests per employee per month
+        # to prevent abuse of the correction mechanism.
+        MAX_MONTHLY_FIXES = 3
+        fix_month_start = date(fix_in.work_date.year, fix_in.work_date.month, 1)
+        _, last_day_num = calendar.monthrange(fix_in.work_date.year, fix_in.work_date.month)
+        fix_month_end = date(fix_in.work_date.year, fix_in.work_date.month, last_day_num)
+
+        from sqlalchemy import func as sa_func
+        stmt_count = select(sa_func.count()).select_from(AttendanceFix).where(
+            and_(
+                AttendanceFix.employee_id == employee_id,
+                AttendanceFix.work_date >= fix_month_start,
+                AttendanceFix.work_date <= fix_month_end,
+                AttendanceFix.status.in_(["PENDING", "APPROVED"])
+            )
+        )
+        monthly_fix_count = (await db.execute(stmt_count)).scalar() or 0
+        if monthly_fix_count >= MAX_MONTHLY_FIXES:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Monthly attendance fix limit reached ({MAX_MONTHLY_FIXES} requests per month). "
+                       f"Please contact HR for further adjustments."
+            )
+
         # Check duplicate pending request
         stmt = select(AttendanceFix).where(
             and_(
