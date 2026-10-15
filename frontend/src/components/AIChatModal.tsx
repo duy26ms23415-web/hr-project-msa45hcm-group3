@@ -278,7 +278,7 @@ export const AIChatModal: React.FC<AIChatModalProps> = ({ open, onClose }) => {
     setReportSetupLoading(true);
     try {
       // The catalog comes from the server; do not offer a scope inferred from UI role names.
-      const response = await api.get<{ reports: ReportDefinition[] }>('/reports/catalog');
+      const response = await api.get<{ reports: ReportDefinition[] }>('/ai/report-catalog');
       if (actorIdRef.current !== requestActor) return;
       const definition = response.data.reports.find((item) => item.kind === kind);
       if (!definition || !definition.scopes.length) {
@@ -307,7 +307,7 @@ export const AIChatModal: React.FC<AIChatModalProps> = ({ open, onClose }) => {
     const requestActor = actorIdRef.current;
     setReportSaving(true);
     try {
-      const response = await api.post<ReportRunCreateResponse>('/reports/runs', reportSetup);
+      const response = await api.post<ReportRunCreateResponse>('/ai/report-runs', reportSetup);
       if (actorIdRef.current !== requestActor) return;
       setReportSetup(null);
       setLastReportRunId(response.data.run.run_id);
