@@ -131,6 +131,7 @@ export const MainLayout: React.FC = () => {
     <Layout style={{ minHeight: '100vh' }}>
       <Sider
         collapsible
+        breakpoint="lg"
         collapsed={collapsed}
         onCollapse={(val) => setCollapsed(val)}
         theme="light"
@@ -222,11 +223,14 @@ export const MainLayout: React.FC = () => {
         )}
       </Sider>
 
-      <Layout>
+      <Layout style={{ minWidth: 0 }}>
         <Header
           style={{
-            height: 64,
-            padding: '0 24px',
+            minHeight: 64,
+            height: 'auto',
+            padding: '12px 24px',
+            flexWrap: 'wrap',
+            gap: 12,
             background: '#ffffff',
             borderBottom: '1px solid #e2e8f0',
             display: 'flex',
@@ -238,14 +242,14 @@ export const MainLayout: React.FC = () => {
           }}
         >
           {/* Office hours badge */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <Tag color="cyan" style={{ padding: '4px 10px', fontSize: 12, borderRadius: 6, border: 'none' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0, maxWidth: '100%' }}>
+            <Tag color="cyan" style={{ padding: '4px 10px', fontSize: 12, borderRadius: 6, border: 'none', marginInlineEnd: 0, whiteSpace: 'normal', lineHeight: '22px' }}>
               🕒 Giờ chuẩn: <b>08:00 - 17:00</b> (Nghỉ trưa 12:00 - 13:00 • 8h/ngày)
             </Tag>
           </div>
 
           {/* Right Header items */}
-          <Space orientation="horizontal" size="middle">
+          <Space orientation="horizontal" size="middle" wrap style={{ minWidth: 0, maxWidth: '100%' }}>
             <Button
               type="default"
               icon={<RobotOutlined style={{ color: '#1677ff' }} />}
@@ -288,40 +292,16 @@ export const MainLayout: React.FC = () => {
         </Header>
 
         <Content
+          className="hrms-content"
           style={{
             margin: 24,
+            minWidth: 0,
             minHeight: 'calc(100vh - 112px)',
           }}
         >
           <Outlet />
         </Content>
       </Layout>
-
-      {/* Keep the table toolbar clear; the header still opens the assistant. */}
-      {!aiModalOpen && !location.pathname.startsWith("/reports") && <div
-        style={{
-          position: 'fixed',
-          bottom: 28,
-          right: 28,
-          zIndex: 999,
-        }}
-      >
-        <Button
-          type="primary"
-          shape="circle"
-          size="large"
-          icon={<RobotOutlined style={{ fontSize: 24 }} />}
-          onClick={() => setAiModalOpen(true)}
-          style={{
-            width: 56,
-            height: 56,
-            boxShadow: '0 4px 14px rgba(22, 119, 255, 0.4)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-          }}
-        />
-      </div>}
 
       <AIChatModal key={user?.user_account_id ?? 'anonymous'} open={aiModalOpen} onClose={() => setAiModalOpen(false)} />
     </Layout>

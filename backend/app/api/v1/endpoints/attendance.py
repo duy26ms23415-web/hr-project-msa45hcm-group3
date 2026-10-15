@@ -3,7 +3,7 @@ from typing import List, Optional, Literal
 from pydantic import BaseModel
 # pyrefly: ignore [missing-import]
 from fastapi import APIRouter, Depends, HTTPException, status, Query
-from sqlalchemy import select, and_
+from sqlalchemy import select, and_, func
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -202,10 +202,14 @@ async def list_attendance_records(
     from_date: Optional[date] = None,
     to_date: Optional[date] = None,
     employee_id: Optional[int] = None,
+    email: Optional[str] = Query(None, max_length=254),
+    status_filter: Optional[List[Literal["PRESENT", "INCOMPLETE", "ABSENT", "ON_LEAVE", "HOLIDAY", "REMOTE"]]] = Query(None, alias="status"),
     db: AsyncSession = Depends(get_db),
     current_user: UserAccount = Depends(get_current_user)
 ):
-    """Get daily attendance records (filtered by date range and employee)"""
+    """Filter daily records within the caller's existing employee scope."""
+    if from_date and to_date and from_date > to_date:
+        raise HTTPException(status_code=422, detail="Ngày bắt đầu phải trước hoặc bằng ngày kết thúc")
     user_roles = [ra.role.role_code for ra in current_user.role_assignments]
     
     stmt = select(AttendanceDay)
@@ -230,8 +234,14 @@ async def list_attendance_records(
         stmt = stmt.where(AttendanceDay.work_date >= from_date)
     if to_date:
         stmt = stmt.where(AttendanceDay.work_date <= to_date)
+    if email and email.strip():
+        stmt = stmt.join(Employee, Employee.employee_id == AttendanceDay.employee_id).where(
+            func.lower(Employee.email).contains(email.strip().lower(), autoescape=True)
+        )
+    if status_filter:
+        stmt = stmt.where(AttendanceDay.attendance_status.in_(status_filter))
     
-    stmt = stmt.order_by(AttendanceDay.work_date.desc())
+    stmt = stmt.order_by(AttendanceDay.work_date.desc(), AttendanceDay.attendance_day_id.desc())
     result = await db.execute(stmt)
     return result.scalars().all()
 

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Tabs,
   Card,
@@ -18,6 +18,7 @@ import {
   Alert,
   Tooltip,
   Badge,
+  Select,
 } from 'antd';
 import {
   ClockCircleOutlined,
@@ -27,6 +28,7 @@ import {
   CheckCircleOutlined,
   AuditOutlined,
   InfoCircleOutlined,
+  SearchOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { useAuth } from '../context/AuthContext';
@@ -35,6 +37,14 @@ import type { AttendanceRecord, AttendanceFix, Employee } from '../types';
 import { useLocation, useNavigate } from 'react-router-dom';
 
 const { Title, Text } = Typography;
+
+type RecordFilters = {
+  email?: string;
+  statuses?: string[];
+  dates?: [dayjs.Dayjs, dayjs.Dayjs];
+};
+
+const attendanceStatuses = ['PRESENT', 'INCOMPLETE', 'ABSENT', 'ON_LEAVE', 'HOLIDAY', 'REMOTE'];
 
 export const AttendancePage: React.FC = () => {
   const { user, hasRole } = useAuth();
@@ -47,6 +57,11 @@ export const AttendancePage: React.FC = () => {
   const [approvalFilter, setApprovalFilter] = useState<'PENDING' | 'APPROVED' | 'REJECTED' | 'ALL'>('PENDING');
   const [pendingCount, setPendingCount] = useState<number>(0);
   const [loading, setLoading] = useState(false);
+  const [recordsLoading, setRecordsLoading] = useState(false);
+  const [recordFilterForm] = Form.useForm<RecordFilters>();
+  const [recordFilters, setRecordFilters] = useState<RecordFilters>({});
+  const [recordsPage, setRecordsPage] = useState(1);
+  const recordsRequestId = useRef(0);
 
   // Modal create fix request
   const [fixModalOpen, setFixModalOpen] = useState(false);
@@ -78,15 +93,25 @@ export const AttendancePage: React.FC = () => {
   const [reviewModalOpen, setReviewModalOpen] = useState(false);
 
   const fetchRecords = async () => {
+    const requestId = ++recordsRequestId.current;
     try {
-      setLoading(true);
+      setRecordsLoading(true);
       const [res, employeesRes, ownProfileRes] = await Promise.all([
-        api.get('/attendance/records'),
+        api.get('/attendance/records', {
+          params: showEmployeeIdentity ? {
+            email: recordFilters.email?.trim() || undefined,
+            status: recordFilters.statuses?.length ? recordFilters.statuses : undefined,
+            from_date: recordFilters.dates?.[0].format('YYYY-MM-DD'),
+            to_date: recordFilters.dates?.[1].format('YYYY-MM-DD'),
+          } : undefined,
+          paramsSerializer: { indexes: null },
+        }),
         showEmployeeIdentity ? api.get<Employee[]>('/employees').catch(() => null) : Promise.resolve(null),
         hasRole(['MANAGER']) && !hasRole(['ADMIN', 'HR']) && user?.employee_id != null
           ? api.get<Employee>(`/employees/${user.employee_id}`).catch(() => null)
           : Promise.resolve(null),
       ]);
+      if (requestId !== recordsRequestId.current) return;
       setRecords(res.data);
       const profiles = [
         ...(employeesRes?.data || []),
@@ -96,9 +121,11 @@ export const AttendancePage: React.FC = () => {
         profiles.map((employee) => [employee.employee_id, employee])
       ));
     } catch (e) {
-      console.error(e);
+      if (requestId !== recordsRequestId.current) return;
+      setRecords([]);
+      message.error('Không thể tải bảng chấm công. Vui lòng thử lại.');
     } finally {
-      setLoading(false);
+      if (requestId === recordsRequestId.current) setRecordsLoading(false);
     }
   };
 
@@ -145,7 +172,7 @@ export const AttendancePage: React.FC = () => {
     }
     if (activeTab === 'my-fixes') fetchMyFixes();
     if (activeTab === 'approvals') fetchApprovalFixes(approvalFilter);
-  }, [activeTab, approvalFilter, showEmployeeIdentity, user?.employee_id]);
+  }, [activeTab, approvalFilter, showEmployeeIdentity, user?.employee_id, recordFilters]);
 
   const handleCreateFix = async (values: any) => {
     setSubmitting(true);
@@ -253,12 +280,58 @@ export const AttendancePage: React.FC = () => {
           items={[
             {
               key: 'records',
-              label: 'Bảng công cá nhân',
+              label: showEmployeeIdentity ? 'Bảng chấm công' : 'Bảng công cá nhân',
               children: (
+                <>
+                {showEmployeeIdentity && (
+                  <Form<RecordFilters>
+                    form={recordFilterForm}
+                    layout="vertical"
+                    onFinish={(values) => {
+                      setRecordsPage(1);
+                      setRecordFilters(values);
+                    }}
+                    style={{ marginBottom: 16 }}
+                  >
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'flex-start' }}>
+                      <Form.Item name="email" label="Email nhân viên" style={{ flex: '1 1 240px', marginBottom: 8 }}>
+                        <Input allowClear maxLength={254} placeholder="Nhập toàn bộ hoặc một phần email" />
+                      </Form.Item>
+                      <Form.Item name="statuses" label="Trạng thái" style={{ flex: '1 1 260px', marginBottom: 8 }}>
+                        <Select mode="multiple" allowClear placeholder="Tất cả trạng thái" options={attendanceStatuses.map((value) => ({ value, label: value }))} />
+                      </Form.Item>
+                      <Form.Item name="dates" label="Khoảng ngày" style={{ flex: '1 1 300px', marginBottom: 8 }}>
+                        <DatePicker.RangePicker
+                          allowClear
+                          format="DD/MM/YYYY"
+                          placeholder={['Từ ngày', 'Đến ngày']}
+                          style={{ width: '100%' }}
+                          presets={[
+                            { label: 'Hôm nay', value: [dayjs(), dayjs()] },
+                            { label: 'Tháng này', value: [dayjs().startOf('month'), dayjs().endOf('month')] },
+                            { label: 'Tháng trước', value: [dayjs().subtract(1, 'month').startOf('month'), dayjs().subtract(1, 'month').endOf('month')] },
+                          ]}
+                        />
+                      </Form.Item>
+                    </div>
+                    <Space wrap>
+                      <Button type="primary" htmlType="submit" icon={<SearchOutlined />} loading={recordsLoading}>Áp dụng</Button>
+                      <Button onClick={() => {
+                        recordFilterForm.resetFields();
+                        setRecordsPage(1);
+                        setRecordFilters({});
+                      }}>Xóa bộ lọc</Button>
+                      <Button type="link" onClick={() => recordFilterForm.setFieldValue('dates', undefined)}>Tất cả thời gian</Button>
+                      <Text type="secondary" aria-live="polite">{recordsLoading ? 'Đang tìm kiếm…' : `Tìm thấy ${records.length} bản ghi`}</Text>
+                    </Space>
+                  </Form>
+                )}
                 <Table
                   dataSource={records}
                   rowKey="attendance_day_id"
-                  loading={loading}
+                  loading={recordsLoading}
+                  pagination={{ current: recordsPage, onChange: (page) => setRecordsPage(page) }}
+                  locale={{ emptyText: 'Không có bản ghi chấm công phù hợp' }}
                   columns={[
                     ...(showEmployeeIdentity ? [
                       {
@@ -404,6 +477,7 @@ export const AttendancePage: React.FC = () => {
                     },
                   ]}
                 />
+                </>
               ),
             },
             {
