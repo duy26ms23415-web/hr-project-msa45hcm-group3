@@ -181,8 +181,11 @@ async def test_leave_request_and_manager_approval():
         })
         staff_token = staff_auth.json()["access_token"]
 
-        # Use unique future date
-        future_date = (date.today() + timedelta(days=secrets.randbelow(500) + 50)).isoformat()
+        # Use unique future date on a weekday (Monday-Friday)
+        target_date = date.today() + timedelta(days=secrets.randbelow(500) + 50)
+        while target_date.weekday() >= 5:
+            target_date += timedelta(days=1)
+        future_date = target_date.isoformat()
 
         leave_resp = await ac.post("/api/v1/leaves/requests", json={
             "leave_type_id": 1,
@@ -309,8 +312,45 @@ async def test_google_login_unverified_email(mock_verify):
 @patch("app.api.v1.endpoints.auth.id_token.verify_oauth2_token")
 async def test_google_login_success(mock_verify):
     """Verify Google login succeeds for valid verified employee"""
-    mock_verify.return_value = {"email": "admin@hrgroup3.com", "email_verified": True}
+    from app.core.database import AsyncSessionLocal
+    from app.models.auth import UserAccount, Role, UserRoleAssignment
+    from sqlalchemy import select
+
+    test_email = "admin@fsb.edu.vn"
+    mock_verify.return_value = {"email": test_email, "email_verified": True}
     settings.GOOGLE_CLIENT_ID = "mock_client_id"
+
+    async with AsyncSessionLocal() as session:
+        user = (await session.execute(select(UserAccount).where(UserAccount.login_email == test_email))).scalar_one_or_none()
+        if not user:
+            from app.models.organization import Employee, Department, Position
+            dept = (await session.execute(select(Department))).scalars().first()
+            pos = (await session.execute(select(Position))).scalars().first()
+            emp = (await session.execute(select(Employee).where(Employee.email == test_email))).scalar_one_or_none()
+            if not emp:
+                emp = Employee(
+                    employee_code=f"EMP_{secrets.token_hex(4)}",
+                    full_name="FSB Google User",
+                    email=test_email,
+                    department_id=dept.department_id,
+                    position_id=pos.position_id,
+                    employment_status="ACTIVE",
+                    hire_date=date.today(),
+                )
+                session.add(emp)
+                await session.flush()
+            role_admin = (await session.execute(select(Role).where(Role.role_code == "ADMIN"))).scalars().first()
+            user = UserAccount(
+                employee_id=emp.employee_id,
+                login_email=test_email,
+                password_hash="mock_hash",
+                is_active=True
+            )
+            session.add(user)
+            await session.flush()
+            if role_admin:
+                session.add(UserRoleAssignment(user_account_id=user.user_account_id, role_id=role_admin.role_id))
+            await session.commit()
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         response = await ac.post("/api/v1/auth/login/google", json={"id_token": "valid_token_all_good"})

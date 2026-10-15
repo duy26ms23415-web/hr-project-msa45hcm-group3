@@ -10,6 +10,8 @@ from app.models.organization import Employee
 from app.models.auth import Role, UserAccount, UserRoleAssignment
 from app.models.leave import LeaveType, EmployeeLeaveBalance, LeaveRequest
 from app.models.attendance import AttendanceDay
+from app.models.holiday import Holiday
+from app.models.payroll import PayrollPeriod
 from app.schemas.leave import LeaveRequestCreate, LeaveRequestReview
 
 
@@ -74,6 +76,41 @@ class LeaveService:
         req_in: LeaveRequestCreate
     ) -> LeaveRequest:
         """Create leave request with validation on session and annual leave quota"""
+        # [FIX #2] Reject leave requests on weekends (Sat/Sun)
+        if req_in.leave_date.weekday() >= 5:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Cannot request leave on a weekend ({req_in.leave_date}). "
+                       f"Leave is only valid on working days (Mon-Fri)."
+            )
+
+        # [FIX #2] Reject leave requests on public holidays (already paid, no leave needed)
+        stmt_holiday = select(Holiday).where(Holiday.holiday_date == req_in.leave_date)
+        holiday = (await db.execute(stmt_holiday)).scalar_one_or_none()
+        if holiday:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Cannot request leave on a public holiday: "
+                       f"{holiday.holiday_name} ({req_in.leave_date}). "
+                       f"Holidays are already paid days off."
+            )
+
+        # [FIX #3] Block leave request when payroll period is already CLOSED
+        stmt_period = select(PayrollPeriod).where(
+            and_(
+                PayrollPeriod.period_year == req_in.leave_date.year,
+                PayrollPeriod.period_month == req_in.leave_date.month,
+                PayrollPeriod.status == "CLOSED"
+            )
+        )
+        closed_period = (await db.execute(stmt_period)).scalar_one_or_none()
+        if closed_period:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Payroll period for this month is already CLOSED. "
+                       "Leave requests can no longer be submitted."
+            )
+
         # Validate leave type
         stmt_type = select(LeaveType).where(LeaveType.leave_type_id == req_in.leave_type_id)
         l_type = (await db.execute(stmt_type)).scalar_one_or_none()
@@ -167,6 +204,23 @@ class LeaveService:
                 detail="Only the direct manager can approve or reject this leave request"
             )
 
+        # [FIX #3] Block approval when payroll period is already CLOSED
+        leave_date = getattr(req, "leave_date", None)
+        if leave_date:
+            stmt_period = select(PayrollPeriod).where(
+                and_(
+                    PayrollPeriod.period_year == leave_date.year,
+                    PayrollPeriod.period_month == leave_date.month,
+                    PayrollPeriod.status == "CLOSED"
+                )
+            )
+            closed_period = (await db.execute(stmt_period)).scalar_one_or_none()
+            if closed_period:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Cannot review leave request. Payroll period for this month is already CLOSED."
+                )
+
         now_utc = datetime.now(timezone.utc)
         req.status = review_in.status
         req.reviewer_employee_id = reviewer_employee_id
@@ -182,9 +236,12 @@ class LeaveService:
                 balance.remaining_days = max(Decimal("0.00"), balance.total_entitled_days - balance.used_days)
                 balance.updated_at = now_utc
 
-            # Update day attendance: REMOTE status if remote, otherwise ON_LEAVE
+            # [FIX #5] Update day attendance with race condition protection.
+            # For half-day leave, preserve existing scan data (PRESENT status) for the other half
+            # instead of blindly overwriting the entire record.
             att_status = "REMOTE" if req.leave_type.leave_code == "REMOTE" else "ON_LEAVE"
-            worked_mins = int(req.leave_days * 480) if req.leave_type.is_paid else 0
+            leave_mins = int(req.leave_days * 480) if req.leave_type.is_paid else 0
+            is_half_day = req.leave_days == Decimal("0.5")
 
             stmt_day = select(AttendanceDay).where(
                 and_(
@@ -197,14 +254,22 @@ class LeaveService:
                 day_rec = AttendanceDay(
                     employee_id=req.employee_id,
                     work_date=req.leave_date,
-                    worked_minutes=worked_mins,
+                    worked_minutes=leave_mins,
                     attendance_status=att_status
                 )
                 db.add(day_rec)
             else:
-                day_rec.attendance_status = att_status
-                if req.leave_type.is_paid:
-                    day_rec.worked_minutes = max(day_rec.worked_minutes or 0, worked_mins)
+                has_real_scan = day_rec.first_check_in_at is not None
+                if is_half_day and has_real_scan:
+                    # Half-day leave + employee has real scan data for the other half:
+                    # Keep PRESENT status so payroll correctly integrates both halves
+                    if req.leave_type.is_paid:
+                        day_rec.worked_minutes = max(day_rec.worked_minutes or 0, leave_mins)
+                else:
+                    # Full-day leave or no existing scan: safe to set leave status
+                    day_rec.attendance_status = att_status
+                    if req.leave_type.is_paid:
+                        day_rec.worked_minutes = max(day_rec.worked_minutes or 0, leave_mins)
 
         await db.flush()
         return req

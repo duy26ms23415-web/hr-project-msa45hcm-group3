@@ -1,6 +1,6 @@
 from datetime import date, datetime
 from typing import Optional, List
-from sqlalchemy import BigInteger, String, Boolean, Date, DateTime, ForeignKey
+from sqlalchemy import BigInteger, Integer, String, Boolean, Date, DateTime, ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 from app.core.database import Base
@@ -54,6 +54,9 @@ class Employee(Base):
     employment_status: Mapped[str] = mapped_column(String(20), default="ACTIVE", nullable=False)  # ACTIVE, INACTIVE, TERMINATED
     hire_date: Mapped[date] = mapped_column(Date, nullable=False)
     termination_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    # [FIX #7] Number of tax dependents for PIT deduction (4,400,000 VND per dependent).
+    # Requires DB migration: alembic revision --autogenerate -m "add_dependent_count"
+    dependent_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False, server_default="0")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
