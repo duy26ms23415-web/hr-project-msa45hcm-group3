@@ -9,6 +9,23 @@ from pydantic import BaseModel, ConfigDict
 from app.ai.providers import gemini
 
 
+def test_gemini_model_env_precedence(tmp_path, monkeypatch):
+    """Runtime model comes from .env, with backend and deploy overrides."""
+    from app.core.config import Settings
+
+    monkeypatch.delenv("GEMINI_MODEL_NAME", raising=False)
+    root_env = tmp_path / "root.env"
+    backend_env = tmp_path / "backend.env"
+    root_env.write_text("GEMINI_MODEL_NAME=gemini-root-test\\n", encoding="utf-8")
+    backend_env.write_text("GEMINI_MODEL_NAME=gemini-backend-test\\n", encoding="utf-8")
+
+    configured = Settings(_env_file=(root_env, backend_env))
+    assert configured.GEMINI_MODEL_NAME == "gemini-backend-test"
+
+    monkeypatch.setenv("GEMINI_MODEL_NAME", "gemini-deploy-test")
+    assert Settings(_env_file=(root_env, backend_env)).GEMINI_MODEL_NAME == "gemini-deploy-test"
+
+
 class Answer(BaseModel):
     model_config = ConfigDict(extra="forbid")
     ok: bool
