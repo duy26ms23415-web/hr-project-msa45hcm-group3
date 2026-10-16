@@ -19,7 +19,11 @@ COPY backend/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 COPY backend/ ./
 COPY --from=frontend /build/frontend/dist ./static
-RUN useradd --create-home --uid 10001 appuser
+RUN useradd --create-home --uid 10001 appuser \
+    && mkdir -p /app/storage/private/ai-knowledge /app/storage/private/reports \
+    && chown -R appuser:appuser /app/storage \
+    && chmod -R 700 /app/storage/private
+
 USER appuser
 EXPOSE 8080
 CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port \"${PORT:-8080}\""]
