@@ -48,3 +48,11 @@ def forbid_unit_database_connections(request):
     finally:
         event.remove(engine.sync_engine, "do_connect", reject_connection)
     assert not unexpected_calls, "Unit test attempted a real database connection"
+
+
+@pytest.fixture(autouse=True)
+def isolate_ai_settings(monkeypatch):
+    from app.core.config import settings
+    monkeypatch.setattr(settings, "GEMINI_ENABLED", False)
+    monkeypatch.setattr(settings, "GEMINI_SEMANTIC_ENABLED", False)
+    monkeypatch.setattr(settings, "GEMINI_PUBLIC_SEARCH_ENABLED", False)
