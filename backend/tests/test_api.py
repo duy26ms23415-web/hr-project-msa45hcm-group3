@@ -181,8 +181,11 @@ async def test_leave_request_and_manager_approval():
         })
         staff_token = staff_auth.json()["access_token"]
 
-        # Use unique future date
-        future_date = (date.today() + timedelta(days=secrets.randbelow(500) + 50)).isoformat()
+        # Pick a future workday; LeaveService rejects Saturday and Sunday.
+        target_date = date.today() + timedelta(days=secrets.randbelow(500) + 50)
+        while target_date.weekday() >= 5:
+            target_date += timedelta(days=1)
+        future_date = target_date.isoformat()
 
         leave_resp = await ac.post("/api/v1/leaves/requests", json={
             "leave_type_id": 1,
