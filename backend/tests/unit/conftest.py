@@ -21,8 +21,21 @@ def forbid_unmocked_provider_client(monkeypatch):
     assert not unexpected_calls, "Unit test attempted an unmocked provider call"
 
 
+# Legacy upstream integration suites live under tests/unit for now. Exempt only
+# these known DB-backed modules, rather than disabling the guard for future tests.
+_LEGACY_DB_TEST_MODULES = frozenset({
+    "test_attendance_and_payroll_half_day.py",
+    "test_payroll_dependent_and_leave_rules.py",
+    "test_role_and_leave_quota.py",
+})
+
+
 @pytest.fixture(autouse=True)
-def forbid_unit_database_connections():
+def forbid_unit_database_connections(request):
+    if request.node.path.name in _LEGACY_DB_TEST_MODULES:
+        yield
+        return
+
     unexpected_calls = []
 
     def reject_connection(*args, **kwargs):
