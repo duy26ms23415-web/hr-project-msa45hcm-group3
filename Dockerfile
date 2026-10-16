@@ -23,9 +23,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY backend/ ./
 COPY --from=frontend /build/frontend/dist ./static
 RUN useradd --create-home --uid 10001 appuser \
-    && mkdir -p /app/storage/private/ai-knowledge \
-    && chown -R appuser:appuser /app/storage/private/ai-knowledge \
-    && chmod 700 /app/storage/private/ai-knowledge
+    && mkdir -p /app/storage/private/ai-knowledge /app/storage/private/reports \
+    && chown -R appuser:appuser /app/storage \
+    && chmod -R 700 /app/storage/private
 
 USER appuser
 EXPOSE 8080
