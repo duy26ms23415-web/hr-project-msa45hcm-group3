@@ -6,7 +6,12 @@ from pydantic import Field
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env",
+        # Load dotenv files independently of the process working directory.
+        # backend/.env overrides repo-root .env; deployed environment wins both.
+        env_file=(
+            Path(__file__).resolve().parents[3] / ".env",
+            Path(__file__).resolve().parents[2] / ".env",
+        ),
         case_sensitive=True,
         extra="allow"
     )
