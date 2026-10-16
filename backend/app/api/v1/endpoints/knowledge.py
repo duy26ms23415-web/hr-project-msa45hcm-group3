@@ -6,13 +6,13 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import TypeAdapter, ValidationError
-from sqlalchemy import case, func, select, delete
+from sqlalchemy import case, func, select, delete, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_user, require_roles
 from app.core.database import get_db
 from app.models.auth import UserAccount
 from app.models.knowledge import KnowledgeDocument, KnowledgeDocumentVersion, KnowledgeSection
-from app.schemas.knowledge import KnowledgeRead, KnowledgeWrite, KnowledgeTitleWrite, KnowledgeSectionInput, KnowledgeSectionRead, KnowledgeVersionRead, KnowledgeSourceRead, KnowledgeVersionWrite, KnowledgeSectionsWrite
+from app.schemas.knowledge import KnowledgeRead, KnowledgeWrite, KnowledgeTitleWrite, KnowledgeAccessWrite, KnowledgeSectionInput, KnowledgeSectionRead, KnowledgeVersionRead, KnowledgeSourceRead, KnowledgeVersionWrite, KnowledgeSectionsWrite
 from app.core.config import settings
 from app.services.ai_access import allowed_knowledge_roles, user_roles
 from app.services.knowledge_storage import PDFValidationError, delete_pdf, parse_pdf, resolve_storage_path, store_pdf
@@ -175,6 +175,59 @@ async def rename_document(document_id: int, req: KnowledgeTitleWrite, db: AsyncS
     _editor_access(user, document)
     document.title = req.title
     document.updated_by_user_id = user.user_account_id
+    await db.flush()
+    await db.refresh(document)
+    return document
+
+
+@router.patch("/{document_id}/access", response_model=KnowledgeRead)
+async def update_document_access(
+    document_id: int,
+    req: KnowledgeAccessWrite,
+    db: AsyncSession = Depends(get_db),
+    user: UserAccount = Depends(require_roles(["HR"])),
+):
+    document = await db.scalar(
+        select(KnowledgeDocument)
+        .where(KnowledgeDocument.document_id == document_id)
+        .with_for_update()
+    )
+    if not document:
+        raise HTTPException(404, "DOCUMENT_UNAVAILABLE")
+    _editor_access(user, document)
+
+    allowed = allowed_knowledge_roles(user_roles(user))
+    if req.minimum_role not in allowed:
+        raise HTTPException(403, "PERMISSION_DENIED")
+
+    version_filter = [KnowledgeDocumentVersion.status == "DRAFT"]
+    if document.current_version_id is not None:
+        version_filter.append(KnowledgeDocumentVersion.version_id == document.current_version_id)
+    versions = (await db.scalars(
+        select(KnowledgeDocumentVersion)
+        .where(
+            KnowledgeDocumentVersion.document_id == document_id,
+            or_(*version_filter),
+        )
+        .order_by(KnowledgeDocumentVersion.version_id)
+        .with_for_update()
+    )).all()
+    current_version = next(
+        (version for version in versions if version.version_id == document.current_version_id),
+        None,
+    )
+    if document.current_version_id is not None and current_version is None:
+        raise HTTPException(409, "KNOWLEDGE_CURRENT_VERSION_INCONSISTENT")
+
+    # Check all existing permission levels before changing any row. This keeps
+    # hidden ADMIN content from being made editable through a role downgrade.
+    if any(version.minimum_role not in allowed for version in versions):
+        raise HTTPException(404, "DOCUMENT_UNAVAILABLE")
+
+    document.minimum_role = req.minimum_role
+    document.updated_by_user_id = user.user_account_id
+    for version in versions:
+        version.minimum_role = req.minimum_role
     await db.flush()
     await db.refresh(document)
     return document

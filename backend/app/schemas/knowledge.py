@@ -43,6 +43,11 @@ class KnowledgeTitleWrite(BaseModel):
         return value.strip()
 
 
+class KnowledgeAccessWrite(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    minimum_role: Literal["EMPLOYEE", "MANAGER", "HR", "ADMIN"]
+
+
 class KnowledgeSectionInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     section_code: str = Field(min_length=1, max_length=100, pattern=r"^[A-Za-z0-9_.-]+$")

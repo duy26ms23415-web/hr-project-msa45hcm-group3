@@ -39,12 +39,13 @@ def test_grounding_rejects_forged_sources_evidence_and_numbers(source, text, evi
 ])
 async def test_gemini_writes_dynamic_paraphrase_for_existing_or_new_policy(monkeypatch, question, content, response):
     from app.services import ai_service as module
+    # Isolate policy generation from the separately tested semantic planner.
+    monkeypatch.setattr(module.settings, 'GEMINI_SEMANTIC_ENABLED', False)
     monkeypatch.setattr(module.settings, 'GEMINI_ENABLED', True)
     monkeypatch.setattr(module.settings, 'GEMINI_API_KEY', 'test-key')
-    monkeypatch.setattr(module.genai, 'configure', lambda **kwargs: None)
-    model = SimpleNamespace(generate_content_async=AsyncMock(return_value=SimpleNamespace(text=json.dumps({
-        'statements': [{'source': 1, 'text': response, 'evidence': content}]}))))
-    monkeypatch.setattr(module.genai, 'GenerativeModel', lambda **kwargs: model)
+    model = AsyncMock(return_value=AIGroundedAnswer(statements=[
+        {'source': 1, 'text': response, 'evidence': content}]))
+    monkeypatch.setattr(module, 'generate_json', model)
     db = AsyncMock()
     db.execute.return_value = SimpleNamespace(mappings=lambda: SimpleNamespace(all=lambda: [{
         'document_id': 1, 'title': 'Chính sách công ty', 'status': 'PUBLISHED', 'content': content,
@@ -53,7 +54,6 @@ async def test_gemini_writes_dynamic_paraphrase_for_existing_or_new_policy(monke
     result = await AIService.process_chat(db, 7, AIChatRequest(message=question), {'EMPLOYEE'})
     assert result.answer_mode == 'GEMINI' and result.reply == response + ' [1]'
     assert result.sources[0].viewer_path == '/knowledge/view/1?version=2&section=3'
-    config = model.generate_content_async.call_args.kwargs['generation_config']
-    assert config['response_mime_type'] == 'application/json' and 'response_schema' in config
-    payload = json.loads(model.generate_content_async.call_args.args[0])
+    assert model.call_args.args[3] is AIGroundedAnswer
+    payload = json.loads(model.call_args.args[1])
     assert payload['question'] == question and payload['sources'][0]['text'] == content

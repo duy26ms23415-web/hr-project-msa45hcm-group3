@@ -2,30 +2,54 @@
 
 import json
 import asyncio
+import hashlib
 from datetime import datetime, timedelta, timezone
-from uuid import uuid4
+from uuid import uuid4, uuid5, NAMESPACE_URL
 from fastapi import HTTPException
 from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy import select
+from sqlalchemy import select, func
 from app.core.database import AsyncSessionLocal
 
 from app.models.knowledge import ReportRun
 from app.services.report_service import ReportService, build_xlsx_report
 from app.services.report_storage import delete_report, store_report
-from app.services.ai_request_security import secured_operation
+from app.services.ai_request_security import secured_operation, note_data_scope
 from app.services.ai_access import user_roles, require_reviewer_role
 
 
 class ReportRunService:
     @staticmethod
+    def request_filters(req):
+        filters = {"start_date": req.start_date.isoformat(), "end_date": req.end_date.isoformat(), "department_id": req.department_id}
+        if req.employee_id is not None:
+            filters["employee_id"] = req.employee_id
+        return filters
+
+    @staticmethod
     async def _save_state(user, req, run_id, scope, employee_ids, status, **values):
         """Persist lifecycle independently from a failed business-query session."""
         async with asyncio.timeout(10):
             async with AsyncSessionLocal() as state_db:
+                # Row locks cannot serialize the first insert (no row yet).
+                lock_key = int.from_bytes(hashlib.blake2b(run_id.encode(), digest_size=8).digest(), "big", signed=True)
+                await state_db.execute(select(func.pg_advisory_xact_lock(lock_key)))
                 run = await state_db.scalar(select(ReportRun).where(ReportRun.run_id == run_id, ReportRun.owner_user_account_id == user.user_account_id).with_for_update())
+                if run is not None and status == "GENERATING":
+                    # Claim a fully cleaned failed attempt under the row lock.
+                    # A concurrent retry cannot reset GENERATING or READY.
+                    if (run.status != "FAILED" or run.error_code != "DATA_SERVICE_UNAVAILABLE"
+                            or run.storage_key or run.snapshot_storage_key
+                            or run.kind != req.kind or run.scope != scope
+                            or run.filters != ReportRunService.request_filters(req)):
+                        raise HTTPException(409, "REPORT_ALREADY_EXISTS")
+                    now = datetime.now(timezone.utc)
+                    run.scope_snapshot = list(employee_ids)
+                    run.as_of = now
+                    run.expires_at = now + timedelta(hours=1)
+                    run.error_code = run.sha256 = run.row_count = None
                 if run is None:
                     now = datetime.now(timezone.utc)
-                    run = ReportRun(run_id=run_id, owner_user_account_id=user.user_account_id, kind=req.kind, scope=scope, filters={"start_date": req.start_date.isoformat(), "end_date": req.end_date.isoformat(), "department_id": req.department_id}, template_version=f"{req.kind.lower()}_v1", scope_snapshot=list(employee_ids), as_of=now, expires_at=now + timedelta(hours=1))
+                    run = ReportRun(run_id=run_id, owner_user_account_id=user.user_account_id, kind=req.kind, scope=scope, filters=ReportRunService.request_filters(req), template_version=f"{req.kind.lower()}_v1", scope_snapshot=list(employee_ids), as_of=now, expires_at=now + timedelta(hours=1))
                     state_db.add(run)
                 run.status = status
                 for key, value in values.items():
@@ -35,24 +59,76 @@ class ReportRunService:
                 return run
 
     @staticmethod
-    async def create(db, user, req):
+    async def create(db, user, req, *, source_draft_id=None):
         async with secured_operation(db, user.user_account_id, "REPORT", "REPORT_CREATE", scope=req.scope or "NONE", command=req.kind) as audit:
-            result = await ReportRunService._create(db, user, req)
+            result = await ReportRunService._create(db, user, req, source_draft_id=source_draft_id)
             audit["scope"] = result["run"].scope
             return result
 
     @staticmethod
-    async def _create(db, user, req):
-        run_id = uuid4().hex
+    async def _create(db, user, req, *, source_draft_id=None):
+        # The request owns db. Keep it alive until the bounded attempt reaches
+        # a terminal state, even when the enclosing chat deadline cancels us.
+        # Shielding without awaiting here would race request-session rollback.
+        attempt = asyncio.create_task(ReportRunService._create_attempt(
+            db, user, req, source_draft_id=source_draft_id))
+        try:
+            return await asyncio.shield(attempt)
+        except asyncio.CancelledError:
+            while not attempt.done():
+                try:
+                    await asyncio.shield(attempt)
+                except asyncio.CancelledError:
+                    continue
+                except Exception:
+                    break  # _create_attempt persists failure; preserve cancellation.
+            if not attempt.cancelled():
+                attempt.exception()  # Retrieve a failure even if it raced cancellation.
+            raise
+
+    @staticmethod
+    async def _create_attempt(db, user, req, *, source_draft_id=None):
+        # One stable primary key per chat draft makes committed report runs
+        # reusable after an uncertain HTTP failure or chat transaction rollback.
+        run_id = (uuid5(NAMESPACE_URL, f"hr-ai-report-draft:{source_draft_id}").hex
+                  if source_draft_id is not None else uuid4().hex)
+        # Resolve the requested scope before replay checks. A draft may have
+        # been changed after its original report was committed.
         roles = user_roles(user)
         require_reviewer_role(roles)
         scope = req.scope or ("COMPANY" if req.kind == "PAYROLL_SUMMARY" or req.kind == "HEADCOUNT" and roles & {"HR", "ADMIN"} else "DIRECT_REPORTS" if req.kind in {"HEADCOUNT", "APPROVAL_QUEUE"} else "SELF")
+        if source_draft_id is not None:
+            async with AsyncSessionLocal() as state_db:
+                existing = await state_db.scalar(select(ReportRun).where(
+                    ReportRun.run_id == run_id,
+                    ReportRun.owner_user_account_id == user.user_account_id))
+                if existing is not None:
+                    if existing.status == "READY":
+                        # Reuse only the exact original operation; never return
+                        # an old report for a modified draft or a revoked scope.
+                        filters = existing.filters or {}
+                        expected = ReportRunService.request_filters(req)
+                        if existing.kind != req.kind or filters != expected or existing.scope != scope:
+                            raise HTTPException(409, "REPORT_ALREADY_EXISTS")
+                        from app.services.report_access import authorized_run
+                        verified = await authorized_run(db, user, run_id)
+                        return {"run": verified, "report": None}
+                    retryable = (
+                        existing.status == "FAILED" and existing.error_code == "DATA_SERVICE_UNAVAILABLE"
+                        and not existing.storage_key and not existing.snapshot_storage_key
+                        and existing.kind == req.kind and existing.scope == scope
+                        and existing.filters == ReportRunService.request_filters(req)
+                    )
+                    if not retryable:
+                        raise HTTPException(409, "REPORT_ALREADY_EXISTS")
         employee_ids = []
         started = False
         workbook_key = snapshot_key = None
         try:
             async with asyncio.timeout(30):
-                scope, employee_ids = await ReportService.visible_employee_ids(db, user, req.kind, scope, req.department_id, req.start_date, req.end_date)
+                target_filter = {"employee_id": req.employee_id} if req.employee_id is not None else {}
+                scope, employee_ids = await ReportService.visible_employee_ids(db, user, req.kind, scope, req.department_id, req.start_date, req.end_date, **target_filter)
+                note_data_scope(scope)
                 await ReportRunService._save_state(user, req, run_id, scope, employee_ids, "GENERATING")
                 started = True
                 report = await ReportService.generate(db, user, req.kind, req.start_date, req.end_date, req.department_id, scope, source_employee_ids=employee_ids)
@@ -74,7 +150,7 @@ class ReportRunService:
                     remaining.append(None)
                 except OSError:
                     remaining.append(key)  # Keep failed artifacts linked for TTL cleanup.
-            if not isinstance(exc, HTTPException) or exc.status_code >= 500:
+            if started and (not isinstance(exc, HTTPException) or exc.status_code >= 500):
                 try:
                     await ReportRunService._save_state(user, req, run_id, scope, employee_ids, "FAILED", error_code="DATA_SERVICE_UNAVAILABLE", storage_key=remaining[0], snapshot_storage_key=remaining[1], sha256=None, row_count=None)
                 except (SQLAlchemyError, TimeoutError, OSError):

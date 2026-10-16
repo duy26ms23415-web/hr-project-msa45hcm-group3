@@ -104,7 +104,33 @@ npm run dev
 
 ---
 
+#### Build image ứng dụng từ thư mục gốc
+
+Không bắt buộc cấu hình Google SSO để build:
+
+```bash
+docker build -t hrms .
+```
+
+Khi dùng Google SSO, truyền Client ID vào lúc build frontend (biến lúc chạy container không thay đổi bundle Vite):
+
+```bash
+docker build --build-arg VITE_GOOGLE_CLIENT_ID=<google-client-id> -t hrms .
+```
+
+Hai lệnh Docker trên chưa được kiểm chứng bằng Docker build. Các sửa đổi bộ lọc `HALF_DAY` và ẩn AI cho tài khoản chỉ có `KIOSK` không cần migration hoặc seed mới. Kiểm tra giao diện bằng tài khoản HR/Manager (lọc nửa ngày) và Kiosk (không hiện AI).
+
 ### 6. Tài khoản dùng thử (Demo Accounts)
+
+#### Kiểm tra sửa người được đọc tài liệu
+
+Chức năng đã triển khai, dùng các cột quyền hiện có; không thêm biến môi trường, migration, dependency hoặc yêu cầu seed mới. Chạy backend/frontend theo hướng dẫn trên với database đã có các bảng kho kiến thức.
+
+Đăng nhập HR hoặc Admin, mở **Tài liệu & chính sách**, chọn bút sửa ở cột **Người được đọc**, đổi nhóm và lưu. Có thể dùng một PDF nháp vừa tải lên; bản nháp chỉ được AI sử dụng sau khi công bố. Với tài liệu đã công bố, kiểm tra bằng tài khoản thuộc/không thuộc nhóm mới để xác nhận quyền xem PDF và nguồn trả lời AI. HR không được chọn `ADMIN` hoặc sửa tài liệu/phiên bản chỉ dành cho Admin. Đây là quy trình smoke test thủ công, cần chạy trên dữ liệu thử nghiệm; không phải bằng chứng đã kiểm thử trên môi trường triển khai.
+
+Luồng giao diện: **Kiểm tra & công bố → Chỉnh sửa → Lưu thay đổi → Công bố** nằm trong cùng hộp thoại. Bấm tên tài liệu để xem PDF; các bộ lọc nằm dưới **Bộ lọc**, thao tác phụ nằm trong menu **⋯**. Backend đang chạy phải nạp route `PATCH /api/v1/ai/knowledge/{document_id}/access` trước khi dùng giao diện mới; nếu tắt auto-reload, khởi động lại backend sau cập nhật mã nguồn.
+
+Kiểm tra tự động liên quan: tại `backend/`, dùng interpreter backend đã cài dependencies chạy `python -B -m pytest tests/unit/test_knowledge_access.py tests/unit/test_ai_api.py -q` (DB/provider được mock). Tại `frontend/`, chạy `npm run build`, rồi `node scripts/check_knowledge_flow.mjs` để thử lưu quyền thành công/thất bại và luồng chỉnh sửa/công bố trên Chromium với API giả lập; script dùng Chrome/Edge đã cài, hoặc đường dẫn `CHROME_PATH`. Các kiểm tra này không thay thế kiểm thử trên database thật.
 
 Hệ thống đã nạp sẵn 3 tài khoản mẫu ứng với các vai trò để kiểm tra tính năng:
 

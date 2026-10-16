@@ -108,6 +108,28 @@ async def test_update_rejects_unallowlisted_keys_and_increments_revision():
 
 
 @pytest.mark.asyncio
+async def test_report_update_does_not_restore_removed_employee_filter():
+    draft = SimpleNamespace(
+        expires_at=module.utc_now() + timedelta(minutes=5),
+        status="COLLECTING", command="DRAFT_REPORT",
+        typed_params={"kind": "ATTENDANCE", "scope": "COMPANY",
+                      "start_date": "2026-10-01", "end_date": "2026-10-15",
+                      "employee_id": 23},
+        missing_fields=[], revision=2,
+    )
+    db = fake_db(draft)
+    updated = await AIDraftService.update_draft(
+        db, "draft-id", 42,
+        {"kind": "ATTENDANCE", "scope": "COMPANY",
+         "start_date": "2026-10-01", "end_date": "2026-10-15"}, [],
+    )
+    assert "employee_id" not in updated.typed_params
+    assert updated.typed_params["scope"] == "COMPANY"
+    assert updated.revision == 3
+    db.flush.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_update_requires_collecting_status():
     draft = SimpleNamespace(
         expires_at=module.utc_now() + timedelta(minutes=5),
@@ -125,3 +147,45 @@ async def test_update_requires_collecting_status():
     assert exc.value.status_code == 409
     assert exc.value.detail == "AI_DRAFT_NOT_COLLECTING"
     db.flush.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_replayed_client_operation_reuses_the_original_draft():
+    from app.services.ai_request_security import request_context
+    from app.services.ai_draft_service import AIDraftService
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    from uuid import uuid5, NAMESPACE_URL
+    db = AsyncMock()
+    db.add = Mock()
+    db.execute.return_value = SimpleNamespace(scalar_one_or_none=lambda: None)
+    key = "chat:9:" + "a" * 32
+    with request_context(key):
+        first = await AIDraftService.create_draft(db, 9, "DRAFT_LEAVE", {}, ["leave_date"])
+        assert first.draft_id == str(uuid5(NAMESPACE_URL, f"hr-ai-draft:9:{key}:DRAFT_LEAVE"))
+        db.execute.return_value = SimpleNamespace(scalar_one_or_none=lambda: first)
+        replay = await AIDraftService.create_draft(db, 9, "DRAFT_LEAVE", {}, ["leave_date"])
+        assert replay is first
+        db.add.assert_called_once()
+        with pytest.raises(HTTPException) as conflict:
+            await AIDraftService.create_draft(db, 9, "DRAFT_LEAVE",
+                {"leave_date": "2026-10-15"}, [])
+        assert conflict.value.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_replayed_expired_draft_does_not_return_stale_form(monkeypatch):
+    from app.services.ai_request_security import request_context
+    from datetime import timedelta
+    from types import SimpleNamespace
+    existing = SimpleNamespace(
+        draft_id="a" * 36, owner_user_account_id=9, status="READY",
+        expires_at=module.utc_now() - timedelta(seconds=1),
+        command="DRAFT_LEAVE", typed_params={}, missing_fields=[],
+    )
+    db = fake_db(existing)
+    with request_context("chat:9:" + "b" * 32):
+        with pytest.raises(HTTPException) as exc:
+            await AIDraftService.create_draft(db, 9, "DRAFT_LEAVE", {}, [])
+    assert exc.value.status_code == 410
+    assert existing.status == "EXPIRED"

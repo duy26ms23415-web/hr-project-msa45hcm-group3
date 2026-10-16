@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
-import { Alert, Button, Card, Col, Row, Empty, Form, Input, InputNumber, Modal, Collapse, Select, Space, Switch, Table, Tabs, Tag, Typography, Upload, Dropdown, Descriptions, message } from 'antd';
+import { Alert, Button, Card, Col, Row, Empty, Form, Input, InputNumber, Modal, Collapse, Select, Space, Switch, Table, Tabs, Tag, Typography, Upload, Dropdown, Descriptions, Popover, message } from 'antd';
 import type { FormInstance } from 'antd';
-import { FilePdfOutlined, PlusOutlined, DeleteOutlined, InboxOutlined, UploadOutlined, EyeOutlined, DownloadOutlined, MoreOutlined, ReloadOutlined } from '@ant-design/icons';
+import { FilePdfOutlined, PlusOutlined, DeleteOutlined, InboxOutlined, UploadOutlined, EyeOutlined, DownloadOutlined, MoreOutlined, ReloadOutlined, EditOutlined, FilterOutlined } from '@ant-design/icons';
 import api from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
@@ -102,6 +102,8 @@ export function KnowledgePage() {
   const [viewing, setViewing] = useState<Document | null>(null);
   const [renaming, setRenaming] = useState<Document | null>(null);
   const [newTitle, setNewTitle] = useState('');
+  const [accessDocument, setAccessDocument] = useState<Document | null>(null);
+  const [newMinimumRole, setNewMinimumRole] = useState('EMPLOYEE');
   const [openingId, setOpeningId] = useState<number | null>(null);
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Document | null>(null);
@@ -211,7 +213,8 @@ export function KnowledgePage() {
       await api.post(`/ai/knowledge/${versionDocument.document_id}/versions/${version.version_id}/publish`);
       message.success(`Đã công bố v${version.version_number}. AI có thể dùng các mục được cho phép trong thời gian hiệu lực.`);
       setReviewingVersion(null);
-      await Promise.all([loadVersions(versionDocument), load()]);
+      setVersionDocument(null);
+      await load();
     } catch (error: any) { message.error(error.response?.data?.detail || 'Không công bố được phiên bản.'); }
     finally { setSaving(false); }
   };
@@ -221,7 +224,8 @@ export function KnowledgePage() {
     try {
       const sections = (await api.get<Section[]>(`/ai/knowledge/${document.document_id}/versions/${version.version_id}/sections`, { params: { preview: true } })).data;
       setVersionDocument(document); setReviewSections(sections); setReviewingVersion(version);
-    } catch (error) { message.error(await aiErrorMessage(error, 'Không tải được các mục cần kiểm tra.')); }
+      return true;
+    } catch (error) { message.error(await aiErrorMessage(error, 'Không tải được các mục cần kiểm tra.')); return false; }
     finally { setReviewLoading(false); }
   };
   const reviewFromList = async (document: Document) => {
@@ -256,9 +260,11 @@ export function KnowledgePage() {
     const sections = sectionPayload(values.sections);
     setSaving(true);
     try {
-      await api.put(`/ai/knowledge/${versionDocument.document_id}/versions/${editingVersion.version_id}`, { title: values.title, minimum_role: values.minimum_role, effective_from: values.effective_from || null, effective_to: values.effective_to || null, sections });
+      const { data } = await api.put<Version>(`/ai/knowledge/${versionDocument.document_id}/versions/${editingVersion.version_id}`, { title: values.title, minimum_role: values.minimum_role, effective_from: values.effective_from || null, effective_to: values.effective_to || null, sections });
+      setReviewingVersion(data);
+      if (!await reviewVersion(data, versionDocument)) return;
       setEditingVersion(null);
-      message.success('Đã lưu bản nháp và kiểm tra mapping với PDF.');
+      message.success('Đã lưu bản nháp. Bạn có thể công bố khi đã kiểm tra xong.');
       await loadVersions(versionDocument);
     } catch (error: any) { message.error(typeof error.response?.data?.detail === 'string' ? error.response.data.detail : 'Không lưu được mapping. Kiểm tra heading/trang và quyền.'); }
     finally { setSaving(false); }
@@ -291,6 +297,23 @@ export function KnowledgePage() {
     } catch (error) { message.error(await aiErrorMessage(error, 'Không đổi được tên tài liệu.')); }
     finally { setSaving(false); }
   };
+  const saveDocumentAccess = async () => {
+    if (!accessDocument) return;
+    setSaving(true);
+    try {
+      const { data } = await api.patch<Document>(`/ai/knowledge/${accessDocument.document_id}/access`, { minimum_role: newMinimumRole });
+      setDocuments(items => items.map(document => document.document_id === data.document_id ? data : document));
+      if (versionDocument?.document_id === data.document_id) {
+        setVersionDocument(data);
+        versionForm.setFieldValue('minimum_role', data.minimum_role);
+        await loadVersions(data);
+      }
+      setAccessDocument(null);
+      message.success('Đã cập nhật người được đọc.');
+      await load();
+    } catch (error) { message.error(await aiErrorMessage(error, 'Không cập nhật được người được đọc.')); }
+    finally { setSaving(false); }
+  };
   const restoreDocument = async (document: Document) => {
     setSaving(true);
     try {
@@ -310,6 +333,12 @@ export function KnowledgePage() {
   const filtered = documents.filter(document => searchText(`${document.title} ${document.document_code || ''}`).includes(searchText(search))
     && (!statusFilter || document.status === statusFilter) && (!roleFilter || document.minimum_role === roleFilter));
   const modalStyles = { body: { maxHeight: 'calc(100dvh - 180px)', overflowY: 'auto' as const } };
+  const closeDocumentPanel = () => {
+    if (saving || editorLoading || reviewLoading) return;
+    setVersionDocument(null);
+    setReviewingVersion(null);
+    setEditingVersion(null);
+  };
   const pdfPicker = <Upload.Dragger accept="application/pdf,.pdf" maxCount={1}
     fileList={selectedPdf ? [{ uid: selectedPdf.name, name: selectedPdf.name }] : []}
     beforeUpload={file => {
@@ -359,33 +388,36 @@ export function KnowledgePage() {
     ]} />;
   return <Space orientation="vertical" size="large" style={{ width: '100%' }}>
     <div><Typography.Title level={4} style={{ marginBottom: 8 }}>Tài liệu & chính sách</Typography.Title>
-      <Typography.Text type="secondary">Quản lý nguồn nội bộ để trợ lý AI trả lời có căn cứ.</Typography.Text></div>
-    <Alert type="info" showIcon title="Lưu bản nháp → kiểm tra nội dung → công bố. Chỉ tài liệu đã công bố và đúng quyền truy cập mới được AI sử dụng." />
+      <Typography.Text type="secondary">Thêm tài liệu, kiểm tra rồi công bố để AI sử dụng.</Typography.Text></div>
     <Card title={`Danh sách tài liệu (${documents.length})`} extra={<Button type="primary" icon={<PlusOutlined />} onClick={() => edit(null)}>Thêm tài liệu</Button>}>
       <Space wrap style={{ marginBottom: 20 }}>
         <Input.Search placeholder="Tìm tên hoặc mã, không cần dấu" allowClear value={search} onChange={event => setSearch(event.target.value)} style={{ width: 300 }} />
-        <Select allowClear placeholder="Tất cả trạng thái" value={statusFilter} onChange={setStatusFilter} style={{ width: 180 }}
+        <Popover trigger="click" placement="bottomLeft" title="Lọc tài liệu" content={<Space orientation="vertical" style={{ width: 270 }}>
+        <Select aria-label="Lọc trạng thái" allowClear placeholder="Tất cả trạng thái" value={statusFilter} onChange={setStatusFilter} style={{ width: '100%' }}
           options={Object.entries(statusLabels).map(([value, label]) => ({ value, label: `${label} (${documents.filter(document => document.status === value).length})` }))} />
-        <Select allowClear placeholder="Tất cả người được đọc" value={roleFilter} onChange={setRoleFilter} style={{ width: 250 }} options={roleOptions} />
+        <Select aria-label="Lọc người được đọc" allowClear placeholder="Tất cả người được đọc" value={roleFilter} onChange={setRoleFilter} style={{ width: '100%' }} options={roleOptions} />
+        </Space>}><Button icon={<FilterOutlined />} type={statusFilter || roleFilter ? 'primary' : 'default'}>Bộ lọc{statusFilter || roleFilter ? ` (${[statusFilter, roleFilter].filter(Boolean).length})` : ''}</Button></Popover>
         {(search || statusFilter || roleFilter) && <Button onClick={() => { setSearch(''); setStatusFilter(undefined); setRoleFilter(undefined); }}>Xóa bộ lọc</Button>}
-        <Button icon={<ReloadOutlined />} loading={loading} onClick={() => void load()}>Làm mới</Button>
+        <Button icon={<ReloadOutlined />} loading={loading} onClick={() => void load()} aria-label="Làm mới danh sách" title="Làm mới danh sách" />
       </Space>
-      <Typography.Paragraph type="secondary">{filtered.length} tài liệu phù hợp · Bản nháp và tài liệu lưu trữ chỉ dùng để kiểm tra, chưa được AI sử dụng.</Typography.Paragraph>
       <Table rowKey="document_id" dataSource={filtered} loading={loading} scroll={{ x: 850 }}
         pagination={{ pageSize: 10, showTotal: total => `${total} tài liệu` }}
         locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={documents.length ? 'Không có tài liệu phù hợp bộ lọc.' : 'Chưa có tài liệu. Thêm PDF nội quy hoặc chính sách để bắt đầu.'} /> }}
         columns={[
           { title: 'Tài liệu', dataIndex: 'title', width: 320, sorter: (a, b) => a.title.localeCompare(b.title, 'vi'), render: (value: string, document: Document) => <div>
             <Button type="link" style={{ padding: 0, height: 'auto', whiteSpace: 'normal', textAlign: 'left' }} onClick={() => void openDocument(document)}>{value}</Button>
-            <div><Typography.Text type="secondary" style={{ fontSize: 12 }}>{document.document_code && !document.document_code.startsWith('DOC-') && document.document_code !== value ? document.document_code : `Tài liệu #${document.document_id}`}</Typography.Text></div>
           </div> },
           { title: 'Trạng thái', dataIndex: 'status', render: (value: string) => <Tag color={value === 'PUBLISHED' ? 'green' : 'default'}>{statusLabels[value]}</Tag> },
-          { title: 'Người được đọc', dataIndex: 'minimum_role', render: (value: string) => roleLabels[value] || value },
+          { title: 'Người được đọc', dataIndex: 'minimum_role', render: (value: string, document: Document) => <Space>
+            <span>{roleLabels[value] || value}</span>
+            {hasRole(['HR', 'ADMIN']) && <Button type="text" size="small" icon={<EditOutlined />} disabled={saving}
+              aria-label={`Sửa người được đọc: ${document.title}`} title="Sửa người được đọc"
+              onClick={() => { setAccessDocument(document); setNewMinimumRole(document.minimum_role); }} />}
+          </Space> },
           { title: 'Cập nhật', dataIndex: 'updated_at', defaultSortOrder: 'descend', sorter: (a, b) => Date.parse(a.updated_at) - Date.parse(b.updated_at), render: (value: string) => new Date(value).toLocaleString('vi-VN') },
           { title: 'Thao tác', render: (_, document: Document) => <Space wrap>
-            <Button icon={<EyeOutlined />} loading={openingId === document.document_id} onClick={() => void openDocument(document)}>Xem</Button>
             {document.status === 'DRAFT' && <Button type="primary" loading={openingId === document.document_id} onClick={() => void reviewFromList(document)}>Kiểm tra & công bố</Button>}
-            {document.status !== 'DRAFT' && <Button icon={<FilePdfOutlined />} onClick={() => openVersions(document)}>Phiên bản PDF</Button>}
+            {document.status !== 'DRAFT' && <Button onClick={() => openVersions(document)}>Quản lý</Button>}
             <Dropdown menu={{ items: [
               { key: 'rename', label: 'Đổi tên hiển thị', onClick: () => { setRenaming(document); setNewTitle(document.title); } },
               { key: 'download', label: 'Tải PDF', icon: <DownloadOutlined />, onClick: () => void openDocument(document, true) },
@@ -424,23 +456,23 @@ export function KnowledgePage() {
         </>}
       </Form>
     </Modal>
-    <Modal forceRender centered open={!!versionDocument && !reviewingVersion} title={versionDocument ? `PDF · ${versionDocument.title}` : 'Quản lý PDF'}
-      onCancel={() => { if (!saving) setVersionDocument(null); }} footer={null} width={1000} styles={modalStyles}>
-      <Tabs activeKey={pdfTab} onChange={setPdfTab} items={[
+    <Modal centered open={!!versionDocument} title={editingVersion ? 'Chỉnh bản nháp' : reviewingVersion ? 'Kiểm tra & công bố' : versionDocument?.title}
+      onCancel={closeDocumentPanel} width={900} styles={modalStyles} footer={editingVersion ? <Space>
+        <Button disabled={saving} onClick={() => setEditingVersion(null)}>Quay lại</Button>
+        <Button type="primary" loading={saving} onClick={() => void saveDraftVersion()}>Lưu thay đổi</Button>
+      </Space> : reviewingVersion ? <Space wrap>
+        <Button disabled={saving || editorLoading} onClick={closeDocumentPanel}>Để sau</Button>
+        <Button loading={editorLoading} onClick={() => { if (reviewingVersion) void editDraftVersion(reviewingVersion); }} disabled={saving}>Chỉnh sửa</Button>
+        <Button type="primary" loading={saving} disabled={!reviewSections.length || editorLoading} onClick={() => { if (reviewingVersion) void publishVersion(reviewingVersion); }}>Công bố</Button>
+      </Space> : null}>
+      {!reviewingVersion && !editingVersion && <Tabs activeKey={pdfTab} onChange={setPdfTab} items={[
         ...(versionDocument?.status !== 'ARCHIVED' ? [{ key: 'upload', label: 'Tải phiên bản mới', children: uploadPanel }] : []),
         { key: 'versions', label: `Lịch sử phiên bản (${versions.length})`, children: <>
           {versionDocument?.status === 'ARCHIVED' && <Alert type="warning" showIcon title="Tài liệu đã lưu trữ. Bạn có thể xem/tải các phiên bản; khôi phục về bản nháp để tải bản mới." style={{ marginBottom: 16 }} />}
           {versionsPanel}</> },
-      ]} />
-    </Modal>
-    <Modal centered open={!!reviewingVersion} title={`Kiểm tra & công bố · v${reviewingVersion?.version_number || ''}`} width={850} styles={modalStyles}
-      onCancel={() => { if (!saving) setReviewingVersion(null); }} footer={<Space wrap>
-        <Button disabled={saving} onClick={() => setReviewingVersion(null)}>Để sau</Button>
-        <Button loading={editorLoading} onClick={() => { if (reviewingVersion) { void editDraftVersion(reviewingVersion); setReviewingVersion(null); } }} disabled={saving}>Chỉnh thông tin & mục</Button>
-        <Button type="primary" loading={saving} disabled={!reviewSections.length} onClick={() => { if (reviewingVersion) void publishVersion(reviewingVersion); }}>Công bố v{reviewingVersion?.version_number}</Button>
-      </Space>}>
-      {reviewingVersion && versionDocument && <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
-        <Alert type="info" showIcon title="Sau công bố, phiên bản này trở thành nguồn hiện hành của tài liệu." description="AI chỉ sử dụng các mục được bật, trong thời gian hiệu lực và đúng quyền đọc. Các phiên bản trước vẫn được giữ trong lịch sử." />
+      ]} />}
+      {!editingVersion && reviewingVersion && versionDocument && <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
+        <Typography.Text type="secondary">Kiểm tra người được đọc và nội dung trước khi cho AI sử dụng.</Typography.Text>
         <Descriptions bordered size="small" column={1} items={[
           { key: 'title', label: 'Tên được công bố', children: reviewingVersion.title },
           { key: 'role', label: 'Người được đọc', children: roleLabels[reviewingVersion.minimum_role] || reviewingVersion.minimum_role },
@@ -448,14 +480,29 @@ export function KnowledgePage() {
           { key: 'pdf', label: 'PDF nguồn', children: <Space wrap><Typography.Text>{reviewingVersion.page_count} trang</Typography.Text>
             <Button icon={<EyeOutlined />} href={`/knowledge/view/${versionDocument.document_id}?version=${reviewingVersion.version_id}&preview=true`} target="_blank" rel="noopener noreferrer">Xem PDF ở tab riêng</Button></Space> },
         ]} />
-        <Typography.Text strong>Các mục nguồn · {reviewSections.filter(section => section.is_answerable).length}/{reviewSections.length} mục cho AI sử dụng</Typography.Text>
         {!reviewSections.some(section => section.is_answerable) && <Alert type="warning" showIcon title="Chưa bật mục nào cho AI. Sau công bố, AI vẫn chưa thể trả lời từ tài liệu này." />}
+        <Collapse style={{ width: '100%' }} items={[{ key: 'sections', label: `Nội dung AI được dùng (${reviewSections.filter(section => section.is_answerable).length}/${reviewSections.length} mục)`, children:
         <Table rowKey="section_id" size="small" pagination={false} dataSource={reviewSections} scroll={{ y: 280 }} columns={[
           { title: 'Mục trong PDF', dataIndex: 'heading' },
           { title: 'Trang', render: (_, section: Section) => section.page_start === section.page_end ? section.page_start : `${section.page_start}–${section.page_end}` },
           { title: 'AI sử dụng', dataIndex: 'is_answerable', render: (value: boolean) => <Tag color={value ? 'green' : 'default'}>{value ? 'Được dùng' : 'Không dùng'}</Tag> },
-        ]} />
+        ]} /> }]} />
       </Space>}
+      {editingVersion && <Form form={draftForm} layout="vertical" disabled={saving}>
+        <Form.Item name="title" label="Tên tài liệu" rules={[{ required: true, whitespace: true, max: 200 }]}><Input maxLength={200} /></Form.Item>
+        <Form.Item name="minimum_role" label="Người được đọc" rules={[{ required: true }]}><Select options={roleOptions} /></Form.Item>
+        <Collapse items={[
+          { key: 'dates', label: 'Thời gian hiệu lực (không bắt buộc)', forceRender: true, children:
+            <Row gutter={16}><Col xs={12}><Form.Item name="effective_from" label="Từ ngày"><Input type="date" /></Form.Item></Col><Col xs={12}><Form.Item name="effective_to" label="Đến ngày"><Input type="date" /></Form.Item></Col></Row> },
+          { key: 'sections', label: 'Nội dung AI được dùng', forceRender: true, children: <SectionFields form={draftForm} /> },
+        ]} />
+      </Form>}
+    </Modal>
+    <Modal open={!!accessDocument} title="Sửa người được đọc" onCancel={() => { if (!saving) setAccessDocument(null); }}
+      onOk={() => void saveDocumentAccess()} confirmLoading={saving} okText="Lưu thay đổi" cancelText="Hủy" cancelButtonProps={{ disabled: saving }}>
+      <Typography.Paragraph strong>{accessDocument?.title}</Typography.Paragraph>
+      <Select aria-label="Người được đọc tài liệu" value={newMinimumRole} onChange={setNewMinimumRole} options={roleOptions} disabled={saving} style={{ width: '100%' }} />
+      <Typography.Paragraph type="secondary" style={{ marginTop: 12 }}>Quyền đọc áp dụng ngay sau khi lưu. Tài liệu nháp vẫn cần được công bố để AI sử dụng.</Typography.Paragraph>
     </Modal>
     <Modal open={!!renaming} title="Đổi tên hiển thị" onCancel={() => { if (!saving) setRenaming(null); }} onOk={() => void renameDocument()} confirmLoading={saving} okText="Lưu tên" cancelText="Hủy" okButtonProps={{ disabled: !newTitle.trim() }}>
       <Typography.Paragraph type="secondary">Tên dùng trong danh sách tài liệu. Nội dung và phiên bản PDF đã công bố được giữ nguyên.</Typography.Paragraph>
@@ -465,17 +512,6 @@ export function KnowledgePage() {
       <Alert type="info" showIcon title={`${statusLabels[viewing?.status || 'DRAFT']} · Tài liệu văn bản, chưa có file PDF`} style={{ marginBottom: 16 }} />
       <Typography.Paragraph style={{ whiteSpace: 'pre-wrap' }}>{viewing?.content || 'Chưa có nội dung. Mở Phiên bản PDF để tải tài liệu.'}</Typography.Paragraph>
       {viewing?.source_url && <Typography.Link href={viewing.source_url} target="_blank" rel="noopener noreferrer">Mở liên kết nguồn</Typography.Link>}
-    </Modal>
-    <Modal forceRender centered open={!!editingVersion} title="Chỉnh bản nháp PDF" width={820}
-      onCancel={() => { if (!saving) setEditingVersion(null); }} onOk={() => void saveDraftVersion()} confirmLoading={saving}
-      okText="Lưu thay đổi" cancelText="Hủy" styles={modalStyles}>
-      <Form form={draftForm} layout="vertical" disabled={saving}>
-        <Form.Item name="title" label="Tên phiên bản" rules={[{ required: true, whitespace: true, max: 200 }]}><Input maxLength={200} /></Form.Item>
-        <Form.Item name="minimum_role" label="Ai được đọc?" rules={[{ required: true }]}><Select options={roleOptions} /></Form.Item>
-        <Row gutter={16}><Col xs={12}><Form.Item name="effective_from" label="Hiệu lực từ"><Input type="date" /></Form.Item></Col><Col xs={12}><Form.Item name="effective_to" label="Hiệu lực đến"><Input type="date" /></Form.Item></Col></Row>
-        <Typography.Paragraph type="secondary">Tắt “AI được dùng mục này” cho nội dung chưa ban hành hoặc chưa đủ căn cứ.</Typography.Paragraph>
-        <SectionFields form={draftForm} />
-      </Form>
     </Modal>
   </Space>;
 }

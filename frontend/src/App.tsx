@@ -15,6 +15,7 @@ import { lazy, Suspense } from 'react';
 
 const KnowledgePage = lazy(() => import('./pages/KnowledgePage').then(module => ({ default: module.KnowledgePage })));
 const KnowledgeViewerPage = lazy(() => import('./pages/KnowledgeViewerPage').then(module => ({ default: module.KnowledgeViewerPage })));
+const AIDataAccessPage = lazy(() => import('./pages/AIDataAccessPage').then(module => ({ default: module.AIDataAccessPage })));
 
 const ProtectedRoute: React.FC<{ children: React.ReactNode; requiredRoles?: string[] }> = ({
   children,
@@ -99,9 +100,10 @@ function AppRoutes() {
             </ProtectedRoute>
           }
         />
-        <Route path="reports" element={<ProtectedRoute requiredRoles={['MANAGER', 'HR', 'ADMIN']}><Navigate to="/dashboard" state={{ openAI: true }} replace /></ProtectedRoute>} />
+        <Route path="reports" element={<ProtectedRoute requiredRoles={['EMPLOYEE', 'MANAGER', 'HR', 'ADMIN']}><Navigate to="/dashboard" state={{ openAI: true }} replace /></ProtectedRoute>} />
         <Route path="knowledge/view/:documentId" element={<Suspense fallback={<Spin />}><KnowledgeViewerPage /></Suspense>} />
         <Route path="knowledge" element={<ProtectedRoute requiredRoles={['ADMIN', 'HR']}><Suspense fallback={<Spin />}><KnowledgePage /></Suspense></ProtectedRoute>} />
+        <Route path="ai-access" element={<ProtectedRoute requiredRoles={['ADMIN']}><Suspense fallback={<Spin />}><AIDataAccessPage /></Suspense></ProtectedRoute>} />
         <Route
           path="employees"
           element={

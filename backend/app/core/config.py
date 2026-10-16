@@ -6,7 +6,12 @@ from pydantic import Field
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env",
+        # Load dotenv files independently of the process working directory.
+        # backend/.env overrides repo-root .env; deployed environment wins both.
+        env_file=(
+            Path(__file__).resolve().parents[3] / ".env",
+            Path(__file__).resolve().parents[2] / ".env",
+        ),
         case_sensitive=True,
         extra="allow"
     )
@@ -41,10 +46,18 @@ class Settings(BaseSettings):
 
     # Gemini is opt-in; configuring a key alone never enables paid/quota calls.
     GEMINI_ENABLED: bool = False
+    # Each feature below sends user text to Google and is opt-in separately.
+    GEMINI_SEMANTIC_ENABLED: bool = False
     GEMINI_API_KEY: str = ""
     GEMINI_MODEL_NAME: str = "gemini-3.6-flash"
     GEMINI_INTENT_TIMEOUT_SECONDS: float = Field(default=15, ge=5, le=30)
     GEMINI_POLICY_TIMEOUT_SECONDS: float = Field(default=15, ge=5, le=30)
+    GEMINI_PUBLIC_SEARCH_ENABLED: bool = False
+    # Upper bound kept at 45 so existing deployments still start; the shared
+    # chat budget (budgeted_timeout) caps the effective value per request.
+    GEMINI_PUBLIC_SEARCH_TIMEOUT_SECONDS: float = Field(default=10, ge=5, le=45)
+    # Total wall-clock budget for one chat request, shared by all provider calls.
+    AI_CHAT_TIMEOUT_SECONDS: float = Field(default=30, ge=10, le=60)
     AI_KNOWLEDGE_STORAGE_DIR: Path = Path(__file__).resolve().parents[2] / "storage" / "private" / "ai-knowledge"
     AI_KNOWLEDGE_MAX_UPLOAD_BYTES: int = 10 * 1024 * 1024
     REPORT_STORAGE_DIR: Path = Path(__file__).resolve().parents[2] / "storage" / "private" / "reports"

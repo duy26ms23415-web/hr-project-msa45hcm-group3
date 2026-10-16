@@ -41,6 +41,33 @@ async def test_additional_reports_filter_manager_scope_before_return(kind, expec
         assert "manager_employee_id" in sql
 
 
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("role,scope,expected_fragment", [
+    ("MANAGER", "DIRECT_REPORTS", "manager_employee_id"),
+    ("HR", "COMPANY", "GROUP BY"),
+    ("ADMIN", "COMPANY", "GROUP BY"),
+])
+async def test_authorized_headcount_reaches_grouped_database_query(role, scope, expected_fragment):
+    # Regression: capability verification must not be followed by a
+    # blanket 403 before the HEADCOUNT aggregation.
+    db = AsyncMock()
+    db.execute.return_value = empty_rows()
+    report = await ReportService.generate(
+        db, user(role), "HEADCOUNT",
+        date(2026, 10, 1), date(2026, 10, 31), None, scope,
+    )
+    assert report["kind"] == "HEADCOUNT"
+    assert report["scope"] == scope
+    assert report["rows"] == []
+    db.execute.assert_awaited_once()
+    query = str(db.execute.await_args.args[0].compile(dialect=postgresql.dialect()))
+    assert expected_fragment in query
+    if scope == "COMPANY":
+        assert "manager_employee_id" not in query
+
+
+
 @pytest.mark.asyncio
 async def test_employee_cannot_create_headcount_report():
     db = AsyncMock()
@@ -106,18 +133,23 @@ def test_orphan_scan_ignores_referenced_recent_and_nonserver_files(tmp_path, mon
 
 
 @pytest.mark.asyncio
-async def test_report_run_read_rechecks_owner_and_current_employee_scope(monkeypatch):
+@pytest.mark.parametrize("employee_id", [None, 7])
+async def test_report_run_read_rechecks_owner_and_current_employee_scope(monkeypatch, employee_id):
     run = SimpleNamespace(
         run_id="12345678123456781234567812345678", owner_user_account_id=9,
         status="READY", expires_at=datetime.now(timezone.utc) + timedelta(minutes=10),
         kind="ATTENDANCE", scope="SELF", filters={"start_date": "2026-10-01", "end_date": "2026-10-31"}, scope_snapshot=[7],
     )
+    if employee_id is not None:
+        run.filters["employee_id"] = employee_id
     db = AsyncMock()
     db.scalar.return_value = run
-    monkeypatch.setattr(ReportService, "visible_employee_ids", AsyncMock(return_value=("SELF", [7])))
+    visible = AsyncMock(return_value=("SELF", [7]))
+    monkeypatch.setattr(ReportService, "visible_employee_ids", visible)
     owner = user("MANAGER")
     owner.user_account_id = 9
     assert await _authorized_run(db, owner, run.run_id) is run
+    assert visible.call_args.kwargs == ({"employee_id": employee_id} if employee_id else {})
     sql = str(db.scalar.call_args.args[0].compile(dialect=postgresql.dialect()))
     assert "owner_user_account_id" in sql
 
@@ -249,3 +281,33 @@ def test_workbook_uses_print_layout_native_dates_and_readable_scope():
     assert data["I2"].value == "'=malicious"
     assert "ReportData" in data.tables and data.tables["ReportData"].ref == "A1:I2"
     assert workbook["Thông tin"]["B5"].value == "Nhân viên trực tiếp"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("role,scope,expected_manager_filter", [
+    ("MANAGER", "DIRECT_REPORTS", True),
+    ("HR", "COMPANY", False),
+])
+async def test_headcount_query_intersects_frozen_ids_before_grouping(role, scope, expected_manager_filter):
+    db = AsyncMock()
+    db.execute.return_value = empty_rows()
+    result = await ReportService.generate(db, user(role), "HEADCOUNT",
+        date(2026, 10, 1), date(2026, 10, 31), None, scope,
+        source_employee_ids=[7, 11])
+    assert result["rows"] == []
+    sql = str(db.execute.await_args.args[0].compile(
+        dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}))
+    assert "employee_id IN (7, 11)" in sql
+    assert ("manager_employee_id" in sql) is expected_manager_filter
+    assert "GROUP BY" in sql
+
+
+@pytest.mark.asyncio
+async def test_empty_frozen_headcount_cannot_count_all_employees():
+    db = AsyncMock()
+    db.execute.return_value = empty_rows()
+    await ReportService.generate(db, user("HR"), "HEADCOUNT",
+        date(2026, 10, 1), date(2026, 10, 31), None, "COMPANY", source_employee_ids=[])
+    sql = str(db.execute.await_args.args[0].compile(
+        dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}))
+    assert "employee_id IN " in sql and "GROUP BY" in sql

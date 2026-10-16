@@ -10,6 +10,7 @@ import {
   LogoutOutlined,
   UserOutlined,
   RobotOutlined,
+  SafetyCertificateOutlined,
   ThunderboltOutlined,
 } from '@ant-design/icons';
 import { useNavigate, useLocation, Outlet } from 'react-router-dom';
@@ -73,6 +74,7 @@ export const MainLayout: React.FC = () => {
             ]
           : []),
         ...(hasRole(['ADMIN', 'HR']) ? [{ key: '/knowledge', icon: <RobotOutlined />, label: 'Tài liệu & chính sách' }] : []),
+        ...(hasRole(['ADMIN']) ? [{ key: '/ai-access', icon: <SafetyCertificateOutlined />, label: 'Quyền truy cập AI' }] : []),
         ...(hasRole(['ADMIN', 'HR', 'MANAGER'])
           ? [
               {
@@ -170,7 +172,7 @@ export const MainLayout: React.FC = () => {
           >
             HR
           </div>
-          {!collapsed && (
+          {!collapsed && !isKioskOnly && (
             <div style={{ overflow: 'hidden', whiteSpace: 'nowrap' }}>
               <div style={{ fontWeight: 700, fontSize: 15, color: '#0f172a' }}>Group 3 HRMS</div>
               <div style={{ fontSize: 11, color: '#64748b' }}>AI-Powered System</div>
@@ -187,7 +189,7 @@ export const MainLayout: React.FC = () => {
         />
 
         {/* AI Quick helper promo inside sider */}
-        {!collapsed && (
+        {!collapsed && !isKioskOnly && (
           <div
             style={{
               margin: '24px 16px',
@@ -204,7 +206,7 @@ export const MainLayout: React.FC = () => {
             <p style={{ fontSize: 11, color: '#3b82f6', marginBottom: 10, lineHeight: 1.4 }}>
               Hỏi chính sách, tra cứu công hoặc tạo đơn chỉ trong 5 giây!
             </p>
-            <Button
+            {!isKioskOnly && <Button
               type="primary"
               size="small"
               icon={<ThunderboltOutlined />}
@@ -218,7 +220,7 @@ export const MainLayout: React.FC = () => {
               }}
             >
               Mở Trợ lý AI
-            </Button>
+            </Button>}
           </div>
         )}
       </Sider>
@@ -250,7 +252,7 @@ export const MainLayout: React.FC = () => {
 
           {/* Right Header items */}
           <Space orientation="horizontal" size="middle" wrap style={{ minWidth: 0, maxWidth: '100%' }}>
-            <Button
+            {!isKioskOnly && <Button
               type="default"
               icon={<RobotOutlined style={{ color: '#1677ff' }} />}
               onClick={() => setAiModalOpen(true)}
@@ -263,7 +265,7 @@ export const MainLayout: React.FC = () => {
               }}
             >
               Hỏi AI Assistant
-            </Button>
+            </Button>}
 
             <Dropdown menu={userMenu} placement="bottomRight" arrow>
               <div
@@ -303,7 +305,7 @@ export const MainLayout: React.FC = () => {
         </Content>
       </Layout>
 
-      <AIChatModal key={user?.user_account_id ?? 'anonymous'} open={aiModalOpen} onClose={() => setAiModalOpen(false)} />
+      {!isKioskOnly && <AIChatModal key={user?.user_account_id ?? 'anonymous'} open={aiModalOpen} onClose={() => setAiModalOpen(false)} />}
     </Layout>
   );
 };

@@ -126,6 +126,10 @@ def api_context(monkeypatch):
     monkeypatch.setattr(ai_request_security, "consume_budget", AsyncMock())
     monkeypatch.setattr(ai_request_security, "record_event", AsyncMock())
     app = FastAPI()
+    # Endpoint tests mock business SQL directly. Policy loading has its own
+    # dedicated tests; do not reuse their suggestion rows as policy rows.
+    from app.services.ai_role_scopes import scoped_ai_access
+    app.dependency_overrides[scoped_ai_access] = lambda: None
     app.include_router(ai.router, prefix="/ai")
     app.include_router(knowledge.router, prefix="/ai/knowledge")
     app.include_router(reports.router, prefix="/reports")
@@ -155,16 +159,18 @@ async def test_suggestion_actions_reference_the_relevant_published_section(api_c
     app, _, db = api_context
     codes = ["LEAVE.ANNUAL", "ATTENDANCE.FIX", "REPORT.ACCESS", "LEAVE.REQUEST", "REPORT.CATALOG"]
     rows = [{"document_id": index + 1, "version_id": index + 10, "title": "Published demo", "section_id": index + 20, "section_code": code, "heading": code, "page_start": 2, "page_end": 2} for index, code in enumerate(codes)]
-    db.execute.side_effect = [SimpleNamespace(mappings=lambda row=row: SimpleNamespace(first=lambda: row)) for row in rows]
+    db.execute.return_value = SimpleNamespace(mappings=lambda: SimpleNamespace(all=lambda: rows))
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.get('/ai/suggestions')
     assert response.status_code == 200
     entries = {item["suggestion_id"]: item for item in response.json()}
     assert entries["draft_leave"]["source"]["section_code"] == "LEAVE.REQUEST"
-    assert "my_payslip" not in entries
-    assert "my_attendance_report" not in entries
+    assert entries["my_payslip"]["source"]["section_code"] == "REPORT.CATALOG"
+    assert entries["my_attendance_report"]["source"]["section_code"] == "REPORT.CATALOG"
     assert "tham khảo mục LEAVE.REQUEST" in entries["draft_leave"]["prompt"]
     assert "payroll_summary" not in entries
+    assert "headcount_report" not in entries
+    assert db.execute.call_count == 1
     for call in db.execute.call_args_list:
         query = str(call.args[0].compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}))
         assert "PUBLISHED" in query and "minimum_role IN ('EMPLOYEE')" in query
@@ -175,7 +181,8 @@ async def test_report_catalog_filters_role_and_matches_shipped_columns(api_conte
     app, user, db = api_context
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.get('/reports/catalog')
-        assert response.status_code == 403
+        assert response.status_code == 200
+        assert {item["kind"] for item in response.json()["reports"]} == {"ATTENDANCE", "LEAVE", "ATTENDANCE_FIX", "MY_PAYSLIP"}
         user.role_assignments[0].role.role_code = "MANAGER"
         response = await client.get('/reports/catalog')
         assert response.status_code == 200
@@ -321,7 +328,7 @@ async def test_draft_mapping_validation_happens_before_replacing_sections(monkey
 async def test_chat_identity_and_roles_ignore_client_claims(api_context, monkeypatch):
     app, _, _ = api_context
     process = AsyncMock(return_value=AIChatResponse(reply="OK"))
-    monkeypatch.setattr(ai.AIService, "process_chat", process)
+    monkeypatch.setattr(ai.ChatOrchestrator, "process_chat", process)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.post('/ai/chat', json={"message": "Hi", "employee_id": 99, "roles": ["ADMIN"]})
         assert response.status_code == 422
@@ -515,3 +522,70 @@ def test_automatic_sections_skip_blank_pages_without_changing_page_numbers():
     assert [(section.page_start, section.page_end) for section in sections] == [(1, 1), (3, 3)]
     assert [section.section_code for section in sections] == ["PAGE_1", "PAGE_3"]
     assert knowledge._validate_sections(sections, ["Title\nBody", " ", "Second page\nContent"])
+
+
+@pytest.mark.asyncio
+async def test_duplicate_published_policy_sections_keep_suggestion_without_wrong_citation(api_context):
+    app, _, db = api_context
+    codes = ["LEAVE.ANNUAL", "LEAVE.ANNUAL", "ATTENDANCE.FIX",
+             "REPORT.ACCESS", "LEAVE.REQUEST", "REPORT.CATALOG"]
+    rows = [{"document_id": index + 1, "version_id": index + 10,
+             "title": f"Published policy {index}", "section_id": index + 20,
+             "section_code": code, "heading": code, "page_start": 2, "page_end": 2}
+            for index, code in enumerate(codes)]
+    db.execute.return_value = SimpleNamespace(mappings=lambda: SimpleNamespace(all=lambda: rows))
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/ai/suggestions")
+    assert response.status_code == 200
+    entries = {item["suggestion_id"]: item for item in response.json()}
+    assert len([item for item in response.json() if item["suggestion_id"] == "leave_policy"]) == 1
+    assert entries["leave_policy"]["prompt"] == ai.SUGGESTIONS["leave_policy"].prompt
+    assert entries["leave_policy"]["source"] is None
+    assert entries["attendance_policy"]["source"]["section_code"] == "ATTENDANCE.FIX"
+    assert db.execute.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_headcount_suggestion_is_hidden_for_employee_and_visible_to_manager(api_context):
+    app, user, db = api_context
+    db.execute.return_value = SimpleNamespace(mappings=lambda: SimpleNamespace(all=lambda: []))
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        employee = await client.get("/ai/suggestions")
+        assert employee.status_code == 200
+        assert "headcount_report" not in {item["suggestion_id"] for item in employee.json()}
+        user.role_assignments[0].role.role_code = "MANAGER"
+        manager = await client.get("/ai/suggestions")
+        assert manager.status_code == 200
+        assert "headcount_report" in {item["suggestion_id"] for item in manager.json()}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method,path,payload", [
+    ("POST", "/leaves/requests/2/review", {"status": "REJECTED"}),
+    ("POST", "/leaves/requests/2/approve", {"status": "APPROVED"}),
+    ("POST", "/leaves/requests/2/reject", {"status": "REJECTED"}),
+    ("POST", "/attendance/fixes/2/approve", {"status": "APPROVED"}),
+    ("POST", "/attendance/fixes/2/reject", {"status": "REJECTED"}),
+])
+async def test_employee_cannot_enter_approval_endpoint_even_with_report_create(api_context, method, path, payload):
+    app, user, db = api_context
+    assert user.role_assignments[0].role.role_code == "EMPLOYEE"
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.request(method, path, json=payload)
+    assert response.status_code == 403
+    db.execute.assert_not_awaited()
+    db.flush.assert_not_awaited()
+    db.commit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("url", [
+    "/leaves/requests?view=approvals",
+    "/attendance/fixes?view=approvals",
+])
+async def test_employee_cannot_view_approval_queue(api_context, url):
+    app, user, db = api_context
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(url)
+    assert response.status_code == 403
+    db.execute.assert_not_awaited()

@@ -22,6 +22,7 @@ class AIChatRequest(BaseModel):
     draft_id: StrictStr | None = Field(default=None, min_length=36, max_length=36)
     draft_revision: StrictInt | None = Field(default=None, gt=0)
     report_run_id: StrictStr | None = Field(default=None, pattern=r"^[a-f0-9]{32}$")
+    request_key: StrictStr | None = Field(default=None, pattern=r"^[a-f0-9]{32}$")
     suggestion_id: StrictStr | None = Field(default=None, min_length=1, max_length=80)
     inputs: dict[str, StrictStr | StrictInt] | None = None
 
@@ -93,7 +94,7 @@ class AIChatAction(BaseModel):
             "NAVIGATE": ({"path"}, {"path"}),
             "DRAFT_LEAVE": ({"leave_date", "session", "leave_type_id", "reason"}, {"leave_date", "session", "leave_type_id"}),
             "DRAFT_FIX": ({"work_date", "event_type", "requested_time", "reason"}, {"work_date", "event_type"}),
-            "OPEN_REPORT": ({"path", "kind", "start_date", "end_date", "department_id", "scope", "run_id"}, {"kind", "start_date", "end_date"}),
+            "OPEN_REPORT": ({"path", "kind", "start_date", "end_date", "department_id", "employee_id", "scope", "run_id"}, {"kind", "start_date", "end_date"}),
             "OPEN_APPROVALS": ({"path", "target", "tab"}, {"path", "target", "tab"}),
             "OPEN_KNOWLEDGE": ({"path"}, {"path"}),
             "OPEN_SOURCE": ({"document_id", "version_id", "section_id"}, {"document_id", "version_id", "section_id"}),
@@ -105,7 +106,7 @@ class AIChatAction(BaseModel):
         for key in ("leave_date", "work_date", "start_date", "end_date"):
             if key in data and (not isinstance(data[key], str) or date.fromisoformat(data[key]).isoformat() != data[key]):
                 raise ValueError("AI_ACTION_DATE_INVALID")
-        for key in ("leave_type_id", "department_id", "document_id", "version_id", "section_id"):
+        for key in ("leave_type_id", "department_id", "employee_id", "document_id", "version_id", "section_id"):
             if key in data and (type(data[key]) is not int or data[key] <= 0):
                 raise ValueError("AI_ACTION_ID_INVALID")
         if "reason" in data and (not isinstance(data["reason"], str) or not 1 <= len(data["reason"].strip()) <= 1000):
@@ -171,10 +172,18 @@ class AIInputOption(BaseModel):
     label: StrictStr
 
 
+class AIExternalSource(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    title: StrictStr = Field(min_length=1, max_length=300)
+    url: StrictStr = Field(pattern=r"^https://", max_length=4096)
+
+
 class AIChatResponse(BaseModel):
     reply: str = Field(max_length=MAX_AI_REPLY_CHARS)
     action: Optional[AIChatAction] = None
     sources: List[AISource] = Field(default_factory=list)
+    external_sources: list[AIExternalSource] = Field(default_factory=list, max_length=8)
+    search_suggestions_html: str | None = Field(default=None, max_length=50000)
     answer_mode: Literal["RULE", "RAG", "GEMINI", "OUT_OF_SCOPE"] = "RULE"
     draft_id: StrictStr | None = None
     draft_revision: StrictInt | None = None
@@ -186,7 +195,7 @@ class AIChatResponse(BaseModel):
 
     @model_validator(mode="after")
     def derive_status(self):
-        if self.draft_id:
+        if self.draft_id and self.status == "OK":
             self.status = "NEEDS_INPUT"
         elif self.answer_mode == "OUT_OF_SCOPE" and self.status == "OK":
             self.status = "OUT_OF_SCOPE"

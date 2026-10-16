@@ -426,6 +426,9 @@ Toàn bộ API được phục vụ dưới tiền tố `/api/v1`. Các API yêu
 | `POST` | `/scans` | Kiosk Secret | Quét QR ghi nhận chỉ định loại lượt quét |
 
 ### 3.5. Bảng công & Giải trình Chấm công (`/attendance`)
+
+Đã triển khai: bảng công hỗ trợ lọc email, khoảng ngày và nhiều trạng thái, gồm `HALF_DAY` (nửa ngày). API nhận lặp tham số `status`, ví dụ `?status=PRESENT&status=HALF_DAY`; bộ lọc giữ nguyên phạm vi nhân viên theo quyền. Tài khoản chỉ có vai trò `KIOSK` không hiển thị trợ lý AI.
+
 | Phương thức | Endpoint | Quyền hạn | Mô tả nghiệp vụ |
 | :--- | :--- | :--- | :--- |
 | `GET` | `/attendance/records` | Mọi vai trò | Bảng công chi tiết (Nhân viên xem của mình, Quản lý xem cấp dưới, HR xem toàn công ty) |
@@ -463,6 +466,11 @@ Toàn bộ API được phục vụ dưới tiền tố `/api/v1`. Các API yêu
 | Phương thức | Endpoint | Quyền hạn | Mô tả nghiệp vụ |
 | :--- | :--- | :--- | :--- |
 | `POST` | `/ai/chat` | Mọi vai trò | Hội thoại hỏi đáp chính sách nhân sự và tra cứu công/phép theo ngữ cảnh |
+| `PATCH` | `/ai/knowledge/{document_id}/access` | HR, ADMIN | Đổi nhóm được đọc bằng body `{"minimum_role":"HR"}`; đồng bộ tài liệu, phiên bản hiện hành và các bản nháp |
+
+**Đã triển khai — sửa người được đọc:** Tại **Tài liệu & chính sách**, bấm biểu tượng bút ở cột **Người được đọc**, chọn nhóm rồi **Lưu thay đổi**. Các mức gồm tất cả nhân viên (`EMPLOYEE`), quản lý trở lên (`MANAGER`), HR trở lên (`HR`) và chỉ quản trị viên (`ADMIN`, chỉ Admin được chọn). Người sửa phải có quyền với tài liệu và mọi phiên bản bị tác động. Quyền mới áp dụng ngay cho việc đọc và nguồn AI; các phiên bản lịch sử giữ giới hạn riêng, bản nháp vẫn cần công bố. Thao tác này không thay đổi nội dung hay trạng thái tài liệu.
+
+**Luồng quản lý tài liệu:** Bấm tên để xem nội dung; với bản nháp chọn **Kiểm tra & công bố**, với tài liệu đã công bố/lưu trữ chọn **Quản lý**. Kiểm tra, chỉnh sửa và lịch sử dùng chung một hộp thoại; lưu chỉnh sửa quay lại phần kiểm tra, công bố thành công trở về danh sách. Bộ lọc, thời gian hiệu lực và chi tiết mục PDF chỉ mở khi cần. Menu **⋯** chứa các thao tác phụ như đổi tên, tải xuống và lưu trữ/khôi phục.
 
 ---
 

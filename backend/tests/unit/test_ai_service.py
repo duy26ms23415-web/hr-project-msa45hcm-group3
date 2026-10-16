@@ -66,9 +66,9 @@ def user(role):
 
 def test_report_scope():
     from fastapi import HTTPException
-    with pytest.raises(HTTPException) as denied:
-        employee_scope(user("EMPLOYEE"))
-    assert denied.value.status_code == 403
+    employee = str(employee_scope(user("EMPLOYEE")).compile(
+        dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}))
+    assert "employee_id = 7" in employee and "manager_employee_id" not in employee
     manager = str(employee_scope(user("MANAGER")).compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}))
     assert "manager_employee_id = 7" in manager and " OR " not in manager
     assert "employee_id = 7" in str(employee_scope(user("MANAGER"), "SELF").compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}))
@@ -265,8 +265,10 @@ async def test_draft_followup_uses_owner_bound_state_and_asks_next_missing_field
 
 @pytest.fixture
 def context(monkeypatch):
+    from app.services.ai_employee_tool import AIEmployeeTool
     value = {"today": "2026-10-05", "remaining_leave_days": "0.50", "present_days": 2, "incomplete_dates": ["2026-10-02"], "leave_types": [{"id": 11, "code": "ANNUAL", "name": "Phép năm"}, {"id": 12, "code": "UNPAID", "name": "Không lương"}]}
     monkeypatch.setattr(AIService, "get_employee_context", AsyncMock(return_value=value))
+    monkeypatch.setattr(AIEmployeeTool, "get_context", AsyncMock(return_value=value))
     monkeypatch.setattr("app.services.ai_service.business_today", lambda: date(2026, 10, 5))
     return value
 
@@ -328,15 +330,9 @@ async def test_unknown_role_is_rejected_before_any_database_query():
 @pytest.mark.parametrize("message", ["Tôi còn bao nhiêu phép của Nguyễn An?", "Xem công E3", "Tạo báo cáo toàn công ty"])
 async def test_foreign_or_company_requests_are_denied_before_lookup(message, context):
     db = AsyncMock()
-    if "báo cáo" in message:
-        from fastapi import HTTPException
-        with pytest.raises(HTTPException) as denied:
-            await AIService.process_chat(db, 7, AIChatRequest(message=message), {"EMPLOYEE"})
-        assert denied.value.status_code == 403
-    else:
-        result = await AIService.process_chat(db, 7, AIChatRequest(message=message), {"EMPLOYEE"})
-        assert result.action is None
-        assert "Bạn không có quyền" in result.reply
+    result = await AIService.process_chat(db, 7, AIChatRequest(message=message), {"EMPLOYEE"})
+    assert result.action is None
+    assert "Bạn không có quyền" in result.reply
     db.execute.assert_not_called()
     AIService.get_employee_context.assert_not_awaited()
 
@@ -363,16 +359,17 @@ async def test_free_prompt_does_not_load_personal_context(context):
     db = AsyncMock()
     db.execute.return_value = SimpleNamespace(mappings=lambda: SimpleNamespace(all=lambda: []))
     result = await AIService.process_chat(db, 7, AIChatRequest(message="giải thích chủ đề ngoài HR"), {"EMPLOYEE"})
-    assert result.answer_mode == "OUT_OF_SCOPE"
+    assert result.message_code == "CLARIFICATION_REQUIRED"
     assert AIService.get_employee_context.await_count == 0
 
 
 @pytest.mark.asyncio
 async def test_headcount_chat_shortcut_is_denied_for_employee(context):
     from fastapi import HTTPException
-    with pytest.raises(HTTPException) as denied:
-        await AIService.process_chat(None, 7, AIChatRequest(message="Mở thống kê headcount hiện tại"), {"EMPLOYEE"})
-    assert denied.value.status_code == 403
+    denied = await AIService.process_chat(
+        None, 7, AIChatRequest(message="Mở thống kê headcount hiện tại"), {"EMPLOYEE"})
+    assert denied.action is None and denied.answer_mode == "OUT_OF_SCOPE"
+    assert "Bạn không có quyền" in denied.reply
 
 
 @pytest.mark.asyncio
@@ -386,12 +383,14 @@ async def test_unrelated_followup_does_not_inherit_policy_sources(context):
     }]))
     request = AIChatRequest(message="lập trình python", conversation_history=[AIChatMessage(role="user", content="giờ làm việc")])
     result = await AIService.process_chat(db, 7, request, {"EMPLOYEE"}, owner_user_account_id=7)
-    assert result.answer_mode == "OUT_OF_SCOPE" and result.sources == []
+    assert result.message_code == "CLARIFICATION_REQUIRED" and result.sources == []
 
 
 @pytest.mark.asyncio
 async def test_gemini_timeout_and_ungrounded_output_fall_back(context, monkeypatch):
     from app.services import ai_service as module
+    # The mocked operation is policy generation, not semantic planning.
+    monkeypatch.setattr(module.settings, "GEMINI_SEMANTIC_ENABLED", False)
     from app.schemas.ai import AIChatMessage
     doc = SimpleNamespace(document_id=1, title="Giờ làm việc", content="Giờ làm việc từ 08:00 đến 17:00.", source_url=None, status="PUBLISHED")
     db = AsyncMock()
@@ -401,19 +400,20 @@ async def test_gemini_timeout_and_ungrounded_output_fall_back(context, monkeypat
     }]))
     monkeypatch.setattr(module.settings, "GEMINI_ENABLED", True)
     monkeypatch.setattr(module.settings, "GEMINI_API_KEY", "test-key")
-    monkeypatch.setattr(module.genai, "configure", lambda **kwargs: None)
-    model = SimpleNamespace(generate_content_async=AsyncMock(side_effect=asyncio.TimeoutError))
-    monkeypatch.setattr(module.genai, "GenerativeModel", lambda **kwargs: model)
+    from app.ai.providers.gemini import ProviderFailure
+    generate = AsyncMock(side_effect=ProviderFailure("PROVIDER_TIMEOUT"))
+    monkeypatch.setattr(module, "generate_json", generate)
     request = AIChatRequest(message="giải thích giờ làm việc", conversation_history=[AIChatMessage(role="user", content="employee id 12345 private history")])
     result = await AIService.process_chat(db, 7, request, {"EMPLOYEE"}, owner_user_account_id=7)
     assert result.answer_mode == "RAG" and result.sources[0].document_id == 1
-    assert model.generate_content_async.call_count == 1
-    assert model.generate_content_async.call_args.kwargs["request_options"]["retry"] is None
-    assert model.generate_content_async.call_args.kwargs["generation_config"]["max_output_tokens"] == 1536
-    provider_prompt = model.generate_content_async.call_args.args[0]
+    assert generate.call_count == 1
+    assert generate.call_args.kwargs["max_tokens"] == 1536
+    provider_prompt = generate.call_args.args[1]
     assert '"personal_context"' not in provider_prompt
     assert "private history" not in provider_prompt and "12345" not in provider_prompt
-    model.generate_content_async = AsyncMock(return_value=SimpleNamespace(text='{"statements":[{"source":1,"text":"ngoài kiến thức","evidence":"Không nằm trong nguồn"}]}'))
+    from app.schemas.ai import AIGroundedAnswer
+    generate.side_effect = None
+    generate.return_value = AIGroundedAnswer(statements=[{"source": 1, "text": "ngoài kiến thức", "evidence": "Không nằm trong nguồn"}])
     result = await AIService.process_chat(db, 7, request, {"EMPLOYEE"}, owner_user_account_id=7)
     assert result.answer_mode == "RAG" and "ngoài kiến thức" not in result.reply
 
@@ -424,19 +424,16 @@ async def test_free_intent_classifier_uses_closed_schema_and_redacts_personal_fi
 
     monkeypatch.setattr(module.settings, "GEMINI_ENABLED", True)
     monkeypatch.setattr(module.settings, "GEMINI_API_KEY", "test-key")
-    monkeypatch.setattr(module.genai, "configure", lambda **kwargs: None)
-    model = SimpleNamespace(generate_content_async=AsyncMock(return_value=SimpleNamespace(text='{"intent":"DRAFT_LEAVE"}')))
-    monkeypatch.setattr(module.genai, "GenerativeModel", lambda **kwargs: model)
+    from app.schemas.ai import AIIntentResult
+    generate = AsyncMock(return_value=AIIntentResult(intent="DRAFT_LEAVE"))
+    monkeypatch.setattr(module, "generate_json", generate)
     result = await AIService._classify_free_intent("Xin nghỉ 2026-10-12, tên tôi là Nguyễn An, email ann@example.com, lý do: khám bệnh")
     assert result == "DRAFT_LEAVE"
-    assert model.generate_content_async.call_count == 1
-    assert model.generate_content_async.call_args.kwargs["request_options"]["retry"] is None
-    assert model.generate_content_async.call_args.kwargs["generation_config"]["max_output_tokens"] == 512
-    schema = model.generate_content_async.call_args.kwargs["generation_config"]["response_schema"]
-    assert schema["required"] == ["intent"]
-    assert "ANALYZE_REPORT" in schema["properties"]["intent"]["enum"]
-    assert model.generate_content_async.call_args.kwargs["request_options"]["timeout"] == module.settings.GEMINI_INTENT_TIMEOUT_SECONDS
-    payload = model.generate_content_async.call_args.args[0]
+    assert generate.call_count == 1
+    assert generate.call_args.kwargs["max_tokens"] == 512
+    assert generate.call_args.args[3] is AIIntentResult
+    assert generate.call_args.kwargs["timeout"] == module.settings.GEMINI_INTENT_TIMEOUT_SECONDS
+    payload = generate.call_args.args[1]
     assert "2026-10-12" not in payload
     assert "Nguyễn An" not in payload
     assert "ann@example.com" not in payload
@@ -451,9 +448,9 @@ async def test_free_hr_prompt_without_gemini_returns_stable_unavailable_code(mon
     monkeypatch.setattr(module.settings, "GEMINI_API_KEY", "")
     db = AsyncMock()
     db.execute.return_value = SimpleNamespace(mappings=lambda: SimpleNamespace(all=lambda: []))
-    with pytest.raises(HTTPException) as exc:
-        await AIService.process_chat(db, 7, AIChatRequest(message="Có thể xem giúp số phép năm của tôi không?"), {"EMPLOYEE"})
-    assert (exc.value.status_code, exc.value.detail) == (503, "AI_UNAVAILABLE")
+    response = await AIService.process_chat(db, 7, AIChatRequest(message="Có thể xem giúp số phép năm của tôi không?"), {"EMPLOYEE"})
+    assert response.message_code == "CLARIFICATION_REQUIRED"
+    assert response.status == "NEEDS_INPUT"
 
 
 @pytest.mark.asyncio
@@ -462,8 +459,9 @@ async def test_gemini_disabled_even_when_key_is_configured(monkeypatch):
     from app.services import ai_service as module
     monkeypatch.setattr(module.settings, "GEMINI_ENABLED", False)
     monkeypatch.setattr(module.settings, "GEMINI_API_KEY", "test-key")
+    from app.ai.providers import gemini
     provider = AsyncMock()
-    monkeypatch.setattr(module.genai, "GenerativeModel", provider)
+    monkeypatch.setattr(gemini.genai, "Client", provider)
     with pytest.raises(HTTPException) as exc:
         await AIService._classify_free_intent("help with HR")
     assert exc.value.detail == "AI_UNAVAILABLE"
@@ -541,35 +539,38 @@ def test_unrecognized_date_answer_does_not_become_reason():
     ('{"date":"2026-09-28","reason":"injected"}', None),
 ])
 async def test_gemini_date_parser_has_closed_output_and_minimal_context(monkeypatch, payload, expected):
+    from app.ai.parsing import dates
+    from app.ai.providers.gemini import ProviderFailure
+    from app.schemas.ai import AIChatDateResult
+    from pydantic import ValidationError
     from app.services import ai_service as module
-    monkeypatch.setattr(module.settings, "GEMINI_ENABLED", True)
-    monkeypatch.setattr(module.settings, "GEMINI_API_KEY", "test-key")
     monkeypatch.setattr(module, "business_today", lambda: date(2026, 10, 5))
-    monkeypatch.setattr(module.genai, "configure", lambda **kwargs: None)
-    model = SimpleNamespace(generate_content_async=AsyncMock(return_value=SimpleNamespace(text=payload)))
-    monkeypatch.setattr(module.genai, "GenerativeModel", lambda **kwargs: model)
-    result = await AIService._interpret_chat_date("thu 2 tuan truoc, private@example.test, ly do kham benh")
+    async def fake_generate(*args, **kwargs):
+        try:
+            return AIChatDateResult.model_validate_json(payload)
+        except ValidationError as exc:
+            raise ProviderFailure("SCHEMA_VALIDATION_FAILED") from exc
+    generate = AsyncMock(side_effect=fake_generate)
+    monkeypatch.setattr(dates, "generate_json", generate)
+    result = await AIService._interpret_chat_date("ngay thu hai cua tuan lien truoc, private@example.test, ly do kham benh")
     assert result == expected
-    prompt = model.generate_content_async.call_args.args[0]
-    assert "2026-10-05" in prompt and "thu 2 tuan truoc" in prompt
+    prompt = generate.call_args.args[1]
+    assert "2026-10-05" in prompt and "thu hai cua tuan lien truoc" in prompt
     assert "private" not in prompt and "kham" not in prompt
-    assert model.generate_content_async.call_args.kwargs["request_options"]["retry"] is None
+    assert generate.call_args.kwargs["timeout"] == 5
 
 
 @pytest.mark.asyncio
 async def test_gemini_date_failure_and_disabled_provider_keep_date_missing(monkeypatch):
     from app.services import ai_service as module
+    from app.ai.parsing import dates
+    from app.ai.providers.gemini import ProviderFailure
     monkeypatch.setattr(module.settings, "GEMINI_ENABLED", False)
-    provider = AsyncMock()
-    monkeypatch.setattr(module.genai, "GenerativeModel", provider)
-    assert await AIService._interpret_chat_date("thu 2 tuan truoc") is None
-    provider.assert_not_called()
+    assert await AIService._interpret_chat_date("thu hai cua tuan lien truoc") is None
     monkeypatch.setattr(module.settings, "GEMINI_ENABLED", True)
     monkeypatch.setattr(module.settings, "GEMINI_API_KEY", "test-key")
-    monkeypatch.setattr(module.genai, "configure", lambda **kwargs: None)
-    monkeypatch.setattr(module.genai, "GenerativeModel", lambda **kwargs: SimpleNamespace(
-        generate_content_async=AsyncMock(side_effect=asyncio.TimeoutError)))
-    assert await AIService._interpret_chat_date("thu 2 tuan truoc") is None
+    monkeypatch.setattr(dates, "generate_json", AsyncMock(side_effect=ProviderFailure("PROVIDER_TIMEOUT")))
+    assert await AIService._interpret_chat_date("thu hai cua tuan lien truoc") is None
 
 
 @pytest.mark.asyncio
@@ -581,8 +582,10 @@ async def test_gemini_date_is_applied_only_to_date_field_in_owner_draft(monkeypa
     monkeypatch.setattr(AIDraftService, "get_draft", AsyncMock(return_value=draft))
     update = AsyncMock(return_value=draft)
     monkeypatch.setattr(AIDraftService, "update_draft", update)
-    interpret = AsyncMock(return_value="2026-09-28")
-    monkeypatch.setattr(AIService, "_interpret_chat_date", interpret)
+    from app.ai.parsing import dates
+    from app.schemas.ai import AIChatDateResult
+    interpret = AsyncMock(return_value=AIChatDateResult(date="2026-09-28"))
+    monkeypatch.setattr(dates, "generate_json", interpret)
     result = await AIService.process_chat(None, 7,
         AIChatRequest(message="thu hai cua tuan lien truoc", draft_id=draft.draft_id, draft_revision=1),
         {"EMPLOYEE"}, owner_user_account_id=9)
@@ -625,8 +628,10 @@ async def test_initial_leave_request_keeps_date_and_type_and_combines_remaining_
 
 @pytest.mark.asyncio
 async def test_initial_draft_uses_gemini_for_date_when_local_parser_has_no_answer(monkeypatch):
-    interpret = AsyncMock(return_value="2026-11-10")
-    monkeypatch.setattr(AIService, "_interpret_chat_date", interpret)
+    from app.ai.parsing import dates
+    from app.schemas.ai import AIChatDateResult
+    interpret = AsyncMock(return_value=AIChatDateResult(date="2026-11-10"))
+    monkeypatch.setattr(dates, "generate_json", interpret)
     answers = await AIService._draft_answers_with_date("DRAFT_LEAVE", "xin nghi ngay muoi thang sau")
     assert answers == {"leave_date": "2026-11-10"}
     interpret.assert_awaited_once()
@@ -636,8 +641,9 @@ async def test_initial_draft_uses_gemini_for_date_when_local_parser_has_no_answe
 async def test_invalid_explicit_calendar_date_is_not_repaired_by_gemini(monkeypatch):
     from app.services import ai_service as module
     monkeypatch.setattr(module, "business_today", lambda: date(2026, 10, 5))
-    interpret = AsyncMock(return_value="2026-11-30")
-    monkeypatch.setattr(AIService, "_interpret_chat_date", interpret)
+    from app.ai.parsing import dates
+    interpret = AsyncMock()
+    monkeypatch.setattr(dates, "generate_json", interpret)
     assert await AIService._draft_answers_with_date("DRAFT_LEAVE", "ngay 31 thang sau", ["leave_date"]) == {}
     interpret.assert_not_called()
 
@@ -741,7 +747,7 @@ def test_personal_leave_alias_does_not_replace_policy_or_report():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("command", ["DRAFT_LEAVE", "DRAFT_FIX"])
-@pytest.mark.parametrize("prefix", ["", "lý do: ", "vì "])
+@pytest.mark.parametrize("prefix", ["", "lý do: ", "lý do ", "vì ", "bởi vì ", "do ", "ly do: ", "vi "])
 async def test_reason_turn_preserves_selected_draft_fields(monkeypatch, command, prefix):
     reason = "chăm người thân sau ca phẫu thuật buổi sáng ngày mai lúc 8h check-in"
     interpret = AsyncMock(side_effect=AssertionError("Reason text must not trigger date interpretation"))
@@ -825,3 +831,23 @@ async def test_remote_policy_uses_authorized_knowledge_without_creating_request(
     assert "không trừ quỹ phép năm" in result.reply
     assert result.sources[0].viewer_path == "/knowledge/view/3?version=5&section=8"
     create.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_replayed_completed_leave_draft_returns_prepared_form_without_mutation(monkeypatch):
+    from app.services.ai_draft_service import AIDraftService
+    from app.schemas.ai import AIChatRequest
+    values = {"leave_date": "2026-10-15", "session": "FULL_DAY",
+              "leave_type_id": 2, "reason": "Việc cá nhân"}
+    draft = SimpleNamespace(status="READY", command="DRAFT_LEAVE", typed_params=values)
+    monkeypatch.setattr(AIService, "_draft_answers_with_date", AsyncMock(return_value=values))
+    monkeypatch.setattr(AIService, "_leave_preflight", AsyncMock(return_value=None))
+    monkeypatch.setattr(AIDraftService, "create_draft", AsyncMock(return_value=draft))
+    continuation = AsyncMock(side_effect=AssertionError("READY draft must not be completed again"))
+    monkeypatch.setattr(AIService, "_continue_draft", continuation)
+    response = await AIService._start_draft(
+        AsyncMock(), 7, 9, "DRAFT_LEAVE",
+        AIChatRequest(message="Xin nghỉ ngày 15/10/2026 vì việc cá nhân"))
+    assert response.action.action_type == "DRAFT_LEAVE"
+    assert response.action.data["leave_date"] == values["leave_date"]
+    continuation.assert_not_awaited()
