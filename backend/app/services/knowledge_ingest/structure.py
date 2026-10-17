@@ -31,6 +31,7 @@ class Anchor:
     line_index: int
     heading: str
     level: int
+    title: str = ""  # Bookmark title; names a parent that shares its line with a child in the heading path.
 
 
 def _outline_entries(raw: bytes) -> list[tuple[str, int, int]]:
@@ -75,7 +76,7 @@ def _outline_anchors(raw: bytes, pages: list[list[Line]], skip: set[int]) -> lis
         hit = _locate(title, pages, page, skip)
         if hit:
             line = pages[hit[0] - 1][hit[1]]
-            anchors.append(Anchor(hit[0], hit[1], line.text[:300], min(depth, 6)))
+            anchors.append(Anchor(hit[0], hit[1], line.text[:300], min(depth, 6), title.strip()[:300]))
     # Bookmarks that do not point at visible headings are not trustworthy structure.
     if not entries or len(anchors) < max(2, len(entries) * 0.5):
         return []
@@ -149,7 +150,8 @@ def _merge_numbered_children(anchors: list[Anchor], pages, skip) -> list[Anchor]
 
 
 def _build(anchors: list[Anchor], pages: list[list[Line]], skip: set[int]) -> list[SectionDraft]:
-    anchors = sorted(anchors, key=lambda anchor: (anchor.page, anchor.line_index))
+    # On a shared line the parent comes first, so the child keeps the text and the parent stays in its path.
+    anchors = sorted(anchors, key=lambda anchor: (anchor.page, anchor.line_index, anchor.level))
     positions = [(number, index) for number, lines in enumerate(pages, 1) if number not in skip
                  for index in range(len(lines))]
     order = {position: rank for rank, position in enumerate(positions)}
@@ -166,6 +168,11 @@ def _build(anchors: list[Anchor], pages: list[list[Line]], skip: set[int]) -> li
         lines = [pages[n - 1][i] for n, i in positions[starts[position]:end]]
         while stack and stack[-1][0] >= anchor.level:
             stack.pop()
+        if not lines:
+            # Shares its line with the next anchor (bookmark "Phụ lục" and its child "Phụ lục 1"):
+            # no own text, but it stays in the heading path under its own name, not the child's line.
+            stack.append((anchor.level, anchor.title or anchor.heading))
+            continue
         stack.append((anchor.level, anchor.heading))
         drafts.append(SectionDraft(
             "", anchor.heading, lines[0].page, lines[-1].page, "\n".join(line.text for line in lines),

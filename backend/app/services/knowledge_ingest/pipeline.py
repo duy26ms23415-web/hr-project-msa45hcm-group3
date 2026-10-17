@@ -127,6 +127,12 @@ async def enrich_committed_version(db, version) -> None:
                              .where(KnowledgeChunk.version_id == version.version_id)
                              .order_by(KnowledgeChunk.chunk_id))).all()
     labels, vectors = await _enrichment([(row.contextual_text, row.content) for row in rows], version.version_id)
+    current = (await db.scalars(select(KnowledgeChunk.chunk_id).where(KnowledgeChunk.version_id == version.version_id)
+                                .order_by(KnowledgeChunk.chunk_id))).all()
+    if list(current) != [row.chunk_id for row in rows]:
+        # A newer rebuild replaced the chunks while the provider worked: it owns the status now.
+        await db.rollback()
+        return
     table = KnowledgeChunk.__table__
     if rows:
         values = [{"b_id": row.chunk_id, "b_rule": rule_type, "b_domains": domains}

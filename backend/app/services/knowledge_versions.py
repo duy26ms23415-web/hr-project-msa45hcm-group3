@@ -3,9 +3,11 @@ unpublish, restore and reindex.
 
 Slow provider work (Gemini structure/OCR fallback, tagging, embeddings) never
 runs while this module holds FOR UPDATE locks: uploads build sections before
-locking the document, and publish/reindex commit lexical chunks first and
-enrich them afterwards.
+locking the document, and publish/reindex commit lexical chunks first; the
+endpoints then enrich them in a background task (enrich_in_background).
 """
+import logging
+
 from fastapi import HTTPException
 from sqlalchemy import case, delete, func, select, update
 
@@ -17,6 +19,8 @@ from app.services.knowledge_ingest.pipeline import (
     build_sections, enrich_committed_version, index_version, sections_from_manifest, write_lexical_chunks,
 )
 from app.services.knowledge_storage import PDFValidationError, delete_pdf, parse_pdf, resolve_storage_path, store_pdf
+
+logger = logging.getLogger(__name__)
 
 MAX_SECTIONS = 200
 
@@ -223,6 +227,8 @@ async def update_draft_sections(db, user, document_id, version_id, sections):
 async def publish_version(db, user, document_id, version_id, *, reactivate=False):
     """Publish a DRAFT, or re-activate an ARCHIVED version that was published before.
 
+    Commits lexical chunks only; callers schedule enrich_in_background for tags and embeddings.
+
     A restore-archived draft (never published) cannot be activated; it must go
     through the draft → publish path.
     """
@@ -266,7 +272,6 @@ async def publish_version(db, user, document_id, version_id, *, reactivate=False
     # Searchable (lexically) as soon as the locks are released.
     await write_lexical_chunks(db, version, version.title, parsed.pages)
     await db.commit()
-    await enrich_committed_version(db, version)
     return version
 
 
@@ -287,7 +292,7 @@ async def unpublish_document(db, user, document_id):
 
 
 async def reindex_version(db, user, document_id, version_id):
-    """Rebuild chunks; published versions also get tags and embeddings again."""
+    """Rebuild the lexical chunks; the endpoint then re-enriches published versions (enrich_in_background)."""
     document = await _document(db, document_id, lock=True)
     if not document or document.status == "ARCHIVED":
         raise HTTPException(404, "DOCUMENT_UNAVAILABLE")
@@ -299,9 +304,32 @@ async def reindex_version(db, user, document_id, version_id):
     await write_lexical_chunks(db, version, version.title, pages)
     await db.refresh(version)
     await db.commit()
-    if version.status == "PUBLISHED":
-        await enrich_committed_version(db, version)
     return version
+
+
+async def enrich_in_background(version_id: int) -> None:
+    """Tag and embed a committed PUBLISHED version after the response is sent.
+
+    Runs in its own session: tagging and embedding a large document can take longer than
+    an HTTP request may. Until it finishes the version is searchable lexically."""
+    from app.core.database import AsyncSessionLocal
+    try:
+        async with AsyncSessionLocal() as db:
+            version = await db.get(KnowledgeDocumentVersion, version_id)
+            if version is not None and version.status == "PUBLISHED":
+                await enrich_committed_version(db, version)
+    except Exception:
+        logger.exception("knowledge_enrichment_failed version_id=%s", version_id)
+        try:
+            # Shown as "Lỗi lập chỉ mục" with a reindex button instead of "still indexing" forever.
+            async with AsyncSessionLocal() as db:
+                await db.execute(update(KnowledgeDocumentVersion).where(
+                    KnowledgeDocumentVersion.version_id == version_id,
+                    KnowledgeDocumentVersion.index_status == "PENDING",
+                ).values(index_status="FAILED"))
+                await db.commit()
+        except Exception:
+            logger.exception("knowledge_enrichment_status_failed version_id=%s", version_id)
 
 
 # --- archive / restore ----------------------------------------------------

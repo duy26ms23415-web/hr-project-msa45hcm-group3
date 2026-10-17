@@ -3,7 +3,7 @@ import hashlib
 from datetime import date
 from pathlib import Path
 from uuid import uuid4
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import TypeAdapter, ValidationError
 from sqlalchemy import select, or_
@@ -248,23 +248,29 @@ async def update_draft_sections(document_id: int, version_id: int, req: Knowledg
 async def publish_version(
     document_id: int,
     version_id: int,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     user: UserAccount = Depends(require_roles(["HR"])),
 ):
     async with secured_operation(db, user.user_account_id, "KNOWLEDGE", "PUBLISH", command="KNOWLEDGE_VERSION", rate_limit=False):
-        return await knowledge_versions.publish_version(db, user, document_id, version_id)
+        version = await knowledge_versions.publish_version(db, user, document_id, version_id)
+    background_tasks.add_task(knowledge_versions.enrich_in_background, version.version_id)
+    return version
 
 
 @router.post("/{document_id}/versions/{version_id}/activate", response_model=KnowledgeVersionRead)
 async def activate_version(
     document_id: int,
     version_id: int,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     user: UserAccount = Depends(require_roles(["HR"])),
 ):
     """Make a previously published (now archived) version the published one again."""
     async with secured_operation(db, user.user_account_id, "KNOWLEDGE", "PUBLISH", command="KNOWLEDGE_VERSION", rate_limit=False):
-        return await knowledge_versions.publish_version(db, user, document_id, version_id, reactivate=True)
+        version = await knowledge_versions.publish_version(db, user, document_id, version_id, reactivate=True)
+    background_tasks.add_task(knowledge_versions.enrich_in_background, version.version_id)
+    return version
 
 
 @router.post("/{document_id}/unpublish", response_model=KnowledgeRead)
@@ -282,12 +288,16 @@ async def unpublish_document(
 async def reindex_version(
     document_id: int,
     version_id: int,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     user: UserAccount = Depends(require_roles(["HR"])),
 ):
     """Rebuild chunks; published versions also get tags and embeddings again."""
     async with secured_operation(db, user.user_account_id, "KNOWLEDGE", "PUBLISH", command="KNOWLEDGE_VERSION", rate_limit=False):
-        return await knowledge_versions.reindex_version(db, user, document_id, version_id)
+        version = await knowledge_versions.reindex_version(db, user, document_id, version_id)
+    if version.status == "PUBLISHED":
+        background_tasks.add_task(knowledge_versions.enrich_in_background, version.version_id)
+    return version
 
 
 @router.post("/{document_id}/archive", response_model=KnowledgeRead)

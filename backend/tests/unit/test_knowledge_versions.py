@@ -52,7 +52,7 @@ def sql(call):
 def verified_pdf(monkeypatch):
     monkeypatch.setattr(knowledge_versions, "read_version_pdf", lambda v: (b"pdf", SimpleNamespace(pages=["Điều 1. Nghỉ phép\nNội dung"])))
     monkeypatch.setattr(knowledge_versions, "write_lexical_chunks", AsyncMock())
-    monkeypatch.setattr(knowledge_versions, "enrich_committed_version", AsyncMock())
+    monkeypatch.setattr(knowledge_versions, "enrich_in_background", AsyncMock())
 
 
 @pytest.mark.asyncio
@@ -137,14 +137,55 @@ async def test_publish_commits_before_slow_enrichment(api, monkeypatch):
     monkeypatch.setattr(knowledge_versions, "read_version_pdf", lambda v: (b"pdf", SimpleNamespace(pages=["Điều 1. Nghỉ phép\nNội dung"])))
     monkeypatch.setattr(knowledge_versions, "write_lexical_chunks", AsyncMock(side_effect=lambda *a: order.append("lexical")))
     db.commit.side_effect = lambda: order.append("commit")
-    monkeypatch.setattr(knowledge_versions, "enrich_committed_version", AsyncMock(side_effect=lambda *a: order.append("enrich")))
+    monkeypatch.setattr(knowledge_versions, "enrich_in_background", AsyncMock(side_effect=lambda *a: order.append("enrich")))
     db.scalar.side_effect = [document(), version(1, "DRAFT")]
     section = SimpleNamespace(heading="Điều 1. Nghỉ phép", page_start=1, page_end=1, content="Điều 1. Nghỉ phép\nNội dung")
     db.scalars.return_value = SimpleNamespace(all=lambda: [section])
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         assert (await client.post("/ai/knowledge/1/versions/1/publish")).status_code == 200
-    # Provider work (tags/embeddings) starts only after the row locks are released.
+    # Provider work (tags/embeddings) starts only after the row locks are released,
+    # in a background task so a large document cannot time out the request.
     assert order == ["lexical", "commit", "enrich"]
+
+
+@pytest.mark.asyncio
+async def test_background_enrichment_uses_its_own_session_and_never_raises(monkeypatch):
+    from contextlib import asynccontextmanager
+    import app.core.database as database
+    published, draft = version(1, "PUBLISHED"), version(2, "DRAFT")
+    session = AsyncMock()
+    session.get.side_effect = lambda model, version_id: {1: published, 2: draft}.get(version_id)
+
+    @asynccontextmanager
+    async def factory():
+        yield session
+    monkeypatch.setattr(database, "AsyncSessionLocal", factory)
+    enrich = AsyncMock()
+    monkeypatch.setattr(knowledge_versions, "enrich_committed_version", enrich)
+    await knowledge_versions.enrich_in_background(1)
+    await knowledge_versions.enrich_in_background(2)  # no longer published: skipped
+    assert [call.args for call in enrich.await_args_list] == [(session, published)]
+    enrich.side_effect = RuntimeError("provider down")
+    session.commit.reset_mock()
+    await knowledge_versions.enrich_in_background(1)  # logged, not raised
+    marked = sql(session.execute.await_args_list[-1])
+    assert "index_status='FAILED'" in marked and "index_status = 'PENDING'" in marked
+    session.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_stale_enrichment_leaves_a_newer_rebuild_alone(monkeypatch):
+    from app.services.knowledge_ingest import pipeline
+    rows = [SimpleNamespace(chunk_id=1, contextual_text="Nội quy\nx", content="x")]
+    db = AsyncMock()
+    db.execute.return_value = SimpleNamespace(all=lambda: rows)
+    db.scalars.return_value = SimpleNamespace(all=lambda: [7])  # chunks rebuilt while the provider worked
+    monkeypatch.setattr(pipeline, "_enrichment", AsyncMock(return_value=([("PERMISSION", ["LEAVE"])], [[0.0]])))
+    target = SimpleNamespace(version_id=2, index_status="PENDING", embedding_model=None)
+    await pipeline.enrich_committed_version(db, target)
+    assert db.execute.await_count == 1 and target.index_status == "PENDING"  # no chunk or status writes
+    db.rollback.assert_awaited_once()
+    db.commit.assert_not_awaited()
 
 
 def _ocr_version():

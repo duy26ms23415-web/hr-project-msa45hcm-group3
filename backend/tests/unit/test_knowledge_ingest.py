@@ -238,3 +238,15 @@ async def test_list_steps_under_a_toc_section_stay_body_text_and_year_titles_par
     assert "1. Mo bang cong va kiem tra." not in sections and "2. Gui don giai trinh." in sections["1.1. Cac buoc thuc te"].content
     assert sections["1.1.1. Truong hop dac biet"].heading_path.endswith("1.1. Cac buoc thuc te > 1.1.1. Truong hop dac biet")
     assert sections["2. Bao hiem va thue 2026"].page_start == 4
+
+
+def test_parent_and_child_bookmarks_on_one_line_do_not_crash():
+    from app.services.knowledge_ingest.models import Line
+    from app.services.knowledge_ingest.structure import Anchor, _build
+    pages = [[Line(1, "Phu luc 1. Mau don"), Line(1, "Noi dung mau don nghi phep")]]
+    # The child is listed first on purpose: order must not depend on the outline order.
+    # As _outline_anchors builds them: heading is the matched line, title the bookmark's own name.
+    drafts = _build([Anchor(1, 0, "Phu luc 1. Mau don", 2, "Phu luc 1. Mau don"),
+                     Anchor(1, 0, "Phu luc 1. Mau don", 1, "Phu luc")], pages, set())
+    assert [(draft.heading, draft.heading_path) for draft in drafts] == [("Phu luc 1. Mau don", "Phu luc > Phu luc 1. Mau don")]
+    assert "Noi dung mau don" in drafts[0].content
