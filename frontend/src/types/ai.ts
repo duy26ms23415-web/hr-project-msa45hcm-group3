@@ -19,12 +19,19 @@ export interface AISuggestion { suggestion_id: string; prompt: string; catalog_v
 export type AIDraftInputs = Partial<Record<'leave_date' | 'session' | 'leave_type_id' | 'reason' | 'work_date' | 'event_type' | 'requested_time' | 'kind' | 'start_date' | 'end_date' | 'scope' | 'department_id' | 'employee_id', string | number>>;
 export interface AIChatRequest { message?: string; conversation_history?: { role: 'user' | 'assistant'; content: string }[]; suggestion_id?: string; report_run_id?: string; request_key?: string; draft_id?: string; draft_revision?: number; inputs?: AIDraftInputs }
 export interface AIInputOption { field: 'kind' | 'scope' | 'leave_type_id'; value: string | number; label: string }
+export interface AIPolicyWarning { severity: 'WARNING' | 'CONFLICT' | 'UNCHECKED'; message: string; source: AISource | null }
 export interface AIChatResponse {
   reply: string; action: AIChatAction | null; sources: AISource[];
   external_sources: AIExternalSource[]; search_suggestions_html: string | null;
   answer_mode: 'RULE' | 'RAG' | 'GEMINI' | 'OUT_OF_SCOPE';
   draft_id: string | null; draft_revision: number | null; missing_fields: string[]; input_options: AIInputOption[];
+  clarification_options?: string[]; policy_warnings?: AIPolicyWarning[];
+  report_analysis?: AIReportAnalysis | null;
   status: 'OK' | 'NEEDS_INPUT' | 'DENIED' | 'UNAVAILABLE' | 'OUT_OF_SCOPE'; message_code: string | null; request_id: string | null;
 }
 export interface AIError { code: string; message: string; request_id: string; action: null; sources: []; detail: string }
 export const SESSION_EXPIRED_MESSAGE = 'Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại để tiếp tục.';
+export interface AIReportAnalysis {
+  row_count: number; metrics: Record<string, Record<string, string | number>>;
+  frequencies: Record<string, Record<string, number>>; chart: string | null;
+}
