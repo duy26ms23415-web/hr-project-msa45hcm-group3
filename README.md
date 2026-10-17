@@ -67,7 +67,8 @@ Hệ thống được thiết kế áp dụng cho mô hình doanh nghiệp chu�
 ### 1.7. Trợ lý AI nội bộ (AI Assistant)
 * Hỗ trợ hỏi đáp chính sách nhân sự (giờ giấc, quy chế nghỉ phép, chế độ thai sản/ốm đau, cách tính lương/thuế).
 * Tra cứu dữ liệu cá nhân theo ngữ cảnh thực của nhân viên đang đăng nhập (số dư phép năm còn lại, số ngày công đã tích lũy trong tháng, cảnh báo ngày thiếu chấm công).
-* Hỗ trợ tạo bản nháp đơn xin nghỉ phép và đơn giải trình công qua hội thoại.
+* Hỗ trợ tạo bản nháp đơn xin nghỉ phép và đơn giải trình công qua hội thoại; bản nháp được đối chiếu quy định trong tài liệu đã công bố và chỉ hiện cảnh báo kèm trích dẫn, không chặn.
+* Tài liệu PDF bất kỳ được tự tách mục (bookmark, mục lục, định dạng tiêu đề; Gemini hỗ trợ PDF scan) và tìm kiếm hybrid (pgvector + full-text + trigram). Yêu cầu PostgreSQL có extension `vector` (image `pgvector/pgvector:pg16`). Chi tiết: `docs/AI_COPILOT.md`.
 
 ---
 
@@ -467,6 +468,9 @@ Toàn bộ API được phục vụ dưới tiền tố `/api/v1`. Các API yêu
 | :--- | :--- | :--- | :--- |
 | `POST` | `/ai/chat` | Mọi vai trò | Hội thoại hỏi đáp chính sách nhân sự và tra cứu công/phép theo ngữ cảnh |
 | `PATCH` | `/ai/knowledge/{document_id}/access` | HR, ADMIN | Đổi nhóm được đọc bằng body `{"minimum_role":"HR"}`; đồng bộ tài liệu, phiên bản hiện hành và các bản nháp |
+| `POST` | `/ai/knowledge/{document_id}/versions/{version_id}/activate` | HR, ADMIN | Công bố lại một phiên bản đã ngừng dùng (kiểm tra lại file/mục); phiên bản đang công bố tự chuyển `ARCHIVED` — mỗi tài liệu chỉ có một phiên bản `PUBLISHED` |
+| `POST` | `/ai/knowledge/{document_id}/unpublish` | HR, ADMIN | Ngừng công bố: AI và người đọc ngừng dùng ngay, tài liệu về `DRAFT`, các phiên bản được giữ để công bố lại |
+| `POST` | `/ai/knowledge/{document_id}/versions/{version_id}/reindex` | HR, ADMIN | Tạo lại chunk tìm kiếm; phiên bản đã công bố được gắn nhãn quy định và embedding lại (nếu bật) |
 
 **Đã triển khai — sửa người được đọc:** Tại **Tài liệu & chính sách**, bấm biểu tượng bút ở cột **Người được đọc**, chọn nhóm rồi **Lưu thay đổi**. Các mức gồm tất cả nhân viên (`EMPLOYEE`), quản lý trở lên (`MANAGER`), HR trở lên (`HR`) và chỉ quản trị viên (`ADMIN`, chỉ Admin được chọn). Người sửa phải có quyền với tài liệu và mọi phiên bản bị tác động. Quyền mới áp dụng ngay cho việc đọc và nguồn AI; các phiên bản lịch sử giữ giới hạn riêng, bản nháp vẫn cần công bố. Thao tác này không thay đổi nội dung hay trạng thái tài liệu.
 

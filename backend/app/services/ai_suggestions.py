@@ -90,3 +90,37 @@ def unique_visible_sections(rows: list[dict]) -> tuple[dict[str, dict], set[str]
     for code in ambiguous:
         selected.pop(code, None)
     return selected, ambiguous
+
+
+# Hybrid-search fallback for suggestion citations, cached per visibility class.
+# The key includes a stamp of the published set, so publishing, unpublishing or
+# switching a version recomputes it; entries hold only published-document metadata
+# that every user with the same visible roles may already see.
+_REFERENCE_TTL_SECONDS = 300
+_REFERENCE_CACHE_SIZE = 64
+_reference_cache: dict[tuple, tuple[float, dict]] = {}
+
+
+async def fallback_references(db, roles, allowed_roles, today, queries: dict[str, str]) -> dict:
+    """suggestion_id -> AISource (or None) for specs without a fixed section code."""
+    import time
+    from sqlalchemy import func, select
+    from app.models.knowledge import KnowledgeDocument
+    from app.services.ai_knowledge_tool import AIKnowledgeTool, passage_source
+
+    stamp = (await db.execute(select(
+        func.count(), func.max(KnowledgeDocument.updated_at), func.coalesce(func.sum(KnowledgeDocument.current_version_id), 0),
+    ).where(KnowledgeDocument.status == "PUBLISHED"))).one()
+    key = (frozenset(allowed_roles), today, tuple(stamp), tuple(sorted(queries.items())))
+    now = time.monotonic()
+    cached = _reference_cache.get(key)
+    if cached and cached[0] > now:
+        return cached[1]
+    found = {}
+    for suggestion_id, query in queries.items():
+        passage = next(iter(await AIKnowledgeTool.search(db, roles, today, [query], limit=1)), None)
+        found[suggestion_id] = passage_source(passage, excerpt="") if passage else None
+    if len(_reference_cache) >= _REFERENCE_CACHE_SIZE:
+        _reference_cache.clear()
+    _reference_cache[key] = (now + _REFERENCE_TTL_SECONDS, found)
+    return found

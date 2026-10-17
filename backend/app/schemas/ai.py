@@ -54,7 +54,7 @@ class AIIntentResult(BaseModel):
         "LEAVE_BALANCE", "ATTENDANCE_SUMMARY", "DRAFT_LEAVE", "DRAFT_FIX",
         "REPORT_ATTENDANCE", "REPORT_LEAVE", "REPORT_ATTENDANCE_FIX",
         "REPORT_LEAVE_QUEUE", "REPORT_ATTENDANCE_QUEUE", "REPORT_HEADCOUNT",
-        "REPORT_PAYSLIP", "REPORT_PAYROLL", "ANALYZE_REPORT", "OPEN_KNOWLEDGE", "POLICY_QUERY", "OUT_OF_SCOPE",
+        "REPORT_PAYSLIP", "REPORT_PAYROLL", "REPORT_ANY", "ANALYZE_REPORT", "OPEN_KNOWLEDGE", "LEAVE_STATUS", "POLICY_QUERY", "OUT_OF_SCOPE",
     ]
 
 
@@ -178,6 +178,13 @@ class AIExternalSource(BaseModel):
     url: StrictStr = Field(pattern=r"^https://", max_length=4096)
 
 
+class AIPolicyWarning(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    severity: Literal["WARNING", "CONFLICT", "UNCHECKED"]
+    message: StrictStr = Field(min_length=1, max_length=600)
+    source: AISource | None = None
+
+
 class AIChatResponse(BaseModel):
     reply: str = Field(max_length=MAX_AI_REPLY_CHARS)
     action: Optional[AIChatAction] = None
@@ -189,6 +196,12 @@ class AIChatResponse(BaseModel):
     draft_revision: StrictInt | None = None
     missing_fields: list[str] = Field(default_factory=list)
     input_options: list[AIInputOption] = Field(default_factory=list)
+    # Server-written prompts the user can click when the request was unclear.
+    clarification_options: list[StrictStr] = Field(default_factory=list, max_length=4)
+    # Deterministic analysis of the owner's report run, so the preview shows it without a second rate-limited call.
+    report_analysis: dict | None = None
+    # Document-only rules an action may conflict with; informational, never blocking.
+    policy_warnings: list[AIPolicyWarning] = Field(default_factory=list, max_length=5)
     status: Literal["OK", "NEEDS_INPUT", "DENIED", "UNAVAILABLE", "OUT_OF_SCOPE"] = "OK"
     message_code: str | None = None
     request_id: str | None = None

@@ -73,6 +73,36 @@ def _chart_data(report, metrics, frequencies):
     return None
 
 
+METRIC_LABELS = {
+    "present_days": "Ngày đủ công", "incomplete_days": "Ngày thiếu lượt", "absent_days": "Ngày vắng",
+    "worked_minutes": "Phút làm việc", "approved_days": "Ngày phép đã duyệt", "pending_requests": "Đơn chờ duyệt",
+    "rejected_requests": "Đơn bị từ chối", "remaining_annual_days": "Phép năm còn lại", "employee_count": "Số nhân viên",
+    "gross_salary": "Lương GROSS", "net_salary": "Lương thực nhận", "personal_income_tax": "Thuế TNCN",
+}
+
+
+def _number(value) -> str:
+    amount = Decimal(str(value))
+    text = f"{amount:,.2f}".rstrip("0").rstrip(".")
+    return text.replace(",", "_").replace(".", ",").replace("_", ".")  # Vietnamese grouping
+
+
+def analysis_summary(analysis: dict) -> str:
+    """Chat-sized summary; the full table and chart live in the report preview."""
+    rows = analysis["row_count"]
+    lines = [f"Phân tích {rows} dòng của báo cáo:"]
+    for field, stats in analysis["metrics"].items():
+        line = f"- {METRIC_LABELS.get(field, field)}: tổng **{_number(stats['sum'])}**"
+        if rows > 1:
+            line += f", trung bình {_number(stats['mean'])}/dòng"
+        lines.append(line)
+    if not analysis["metrics"]:
+        lines.append("- Báo cáo không có chỉ số dạng số để thống kê.")
+    lines.append("Biểu đồ đã mở trong cửa sổ báo cáo." if analysis.get("chart")
+                 else "Các số liệu dùng cho biểu đồ đều bằng 0 nên chưa vẽ biểu đồ.")
+    return "\n".join(lines)
+
+
 class AIAnalysisTool:
     @staticmethod
     async def execute(db, user, run_id):
@@ -90,7 +120,12 @@ class AIAnalysisTool:
                 report = json.loads(resolve_report_path(run.snapshot_storage_key or "").read_text(encoding="utf-8"))
             except (OSError, ValueError) as exc:
                 raise HTTPException(404, "REPORT_UNAVAILABLE") from exc
-            return await run_in_threadpool(analyze_report, report)
+            result = await run_in_threadpool(analyze_report, report)
+            # Lets the chat reply open this same authorized run.
+            result["run"] = {"run_id": run.run_id, "kind": run.kind, "scope": run.scope,
+                             "start_date": str(report.get("start_date") or run.filters.get("start_date")),
+                             "end_date": str(report.get("end_date") or run.filters.get("end_date"))}
+            return result
 
 
 def analyze_report(report: dict) -> dict:
@@ -135,10 +170,13 @@ def analyze_report(report: dict) -> dict:
             frequencies["employment_status"][status] = frequencies["employment_status"].get(status, 0) + int(row.get("employee_count") or 0)
     chart = None
     chart_data = _chart_data(report, metrics, frequencies)
+    amounts = [np.asarray(series["values"], dtype=float) for series in chart_data["series"]] if chart_data else []
+    if chart_data and not all(np.isfinite(values).all() for values in amounts):
+        raise HTTPException(422, "ANALYSIS_VALUE_OUT_OF_RANGE")
+    if chart_data and not any(values.any() for values in amounts):
+        # An all-zero chart only draws an empty, misleading axis; the UI says why instead.
+        chart_data = None
     if chart_data:
-        amounts = [np.asarray(series["values"], dtype=float) for series in chart_data["series"]]
-        if not all(np.isfinite(values).all() for values in amounts):
-            raise HTTPException(422, "ANALYSIS_VALUE_OUT_OF_RANGE")
         with _plot_lock:
             labels = chart_data["labels"]
             figure = Figure(figsize=(10, max(4, len(labels) * 0.45 + 1.8) if chart_data["horizontal"] else 4.5), layout="constrained")
@@ -169,6 +207,8 @@ def analyze_report(report: dict) -> dict:
                 axis.set_xlabel(chart_data["unit"])
                 axis.grid(axis="x", alpha=0.2)
                 axis.margins(x=0.15)
+                if all((values >= 0).all() for values in amounts):
+                    axis.set_xlim(left=0)
                 if len(amounts) > 1 or chart_data["stacked"]:
                     axis.legend(loc="upper center", bbox_to_anchor=(0.5, -0.2), ncol=min(3, len(amounts)), frameon=False)
             else:
@@ -176,6 +216,8 @@ def analyze_report(report: dict) -> dict:
                 axis.set_ylabel(chart_data["unit"])
                 axis.grid(axis="y", alpha=0.2)
                 axis.margins(y=0.15)
+                if all((values >= 0).all() for values in amounts):
+                    axis.set_ylim(bottom=0)
             if chart_data["unit"] in {"Nhân viên", "Dòng"}:
                 from matplotlib.ticker import MaxNLocator
                 (axis.xaxis if chart_data["horizontal"] else axis.yaxis).set_major_locator(MaxNLocator(integer=True))

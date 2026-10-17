@@ -10,7 +10,7 @@ from app.services.ai_service import AIService
 
 @pytest.mark.asyncio
 async def test_unrecognized_hr_question_prompts_clarification_without_provider(monkeypatch):
-    monkeypatch.setattr(AIService, "_knowledge_documents", AsyncMock(return_value=[]))
+    monkeypatch.setattr(AIService, "_knowledge_passages", AsyncMock(return_value=([], [])))
     classify = AsyncMock(side_effect=HTTPException(status_code=503, detail="AI_UNAVAILABLE"))
     monkeypatch.setattr(AIService, "_classify_free_intent", classify)
     db = AsyncMock()
@@ -27,7 +27,7 @@ async def test_unrecognized_hr_question_prompts_clarification_without_provider(m
 
 @pytest.mark.asyncio
 async def test_non_hr_request_asks_instead_of_running_any_tool(monkeypatch):
-    monkeypatch.setattr(AIService, "_knowledge_documents", AsyncMock(return_value=[]))
+    monkeypatch.setattr(AIService, "_knowledge_passages", AsyncMock(return_value=([], [])))
     classify = AsyncMock(side_effect=AssertionError("No model call should be required"))
     monkeypatch.setattr(AIService, "_classify_free_intent", classify)
     answer = await AIService._answer_knowledge(

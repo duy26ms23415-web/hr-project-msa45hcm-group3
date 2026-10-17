@@ -5,20 +5,22 @@ import { DownloadOutlined } from '@ant-design/icons';
 import api from '../api/client';
 import { aiErrorMessage } from '../api/aiErrors';
 import type { Report, ReportRun } from '../types/reports';
+import type { AIReportAnalysis } from '../types/ai';
 import { reportFields, reportLabels, reportKindLabels } from './reportPresentation';
 
-interface Props { runId: string | null; onClose: () => void; onRevise: (runId: string) => void }
+interface Props { runId: string | null; onClose: () => void; onRevise: (runId: string) => void; initialAnalysis?: AIReportAnalysis | null }
 export function ChatReportPreview(props: Props) {
   return <ReportPreview key={props.runId ?? 'closed'} {...props} />;
 }
 
-function ReportPreview({ runId, onClose, onRevise }: Props) {
+function ReportPreview({ runId, onClose, onRevise, initialAnalysis }: Props) {
   const [data, setData] = useState<{ run: ReportRun; report: Report; total_rows: number } | null>(null);
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState('');
-  const [analysis, setAnalysis] = useState<{ row_count: number; metrics: Record<string, Record<string, string | number>>; frequencies: Record<string, Record<string, number>>; chart: string | null } | null>(null);
+  // Analysis already computed by the chat reply is shown as-is: no second rate-limited request.
+  const [analysis, setAnalysis] = useState<AIReportAnalysis | null>(initialAnalysis ?? null);
   const [analyzing, setAnalyzing] = useState(false);
   const analyze = async () => {
     if (!runId) return;
@@ -61,7 +63,7 @@ function ReportPreview({ runId, onClose, onRevise }: Props) {
         <div><Typography.Text strong>{data.report.start_date.split('-').reverse().join('/')} – {data.report.end_date.split('-').reverse().join('/')}</Typography.Text>
           <div><Typography.Text type="secondary">{({ SELF: 'Bản thân', DIRECT_REPORTS: 'Nhân viên trực tiếp', COMPANY: 'Toàn công ty' })[data.run.scope]} · {data.total_rows} dòng</Typography.Text></div>
         </div>
-        <Space><Button loading={analyzing} onClick={() => void analyze()}>Phân tích & biểu đồ</Button><Button onClick={() => { onRevise(data.run.run_id); onClose(); }}>Chỉnh qua chat</Button>
+        <Space wrap><Button loading={analyzing} onClick={() => void analyze()}>Phân tích & biểu đồ</Button><Button onClick={() => { onRevise(data.run.run_id); onClose(); }}>Chỉnh qua chat</Button>
           <Button type="primary" icon={<DownloadOutlined />} loading={exporting} disabled={loading} onClick={() => void download()}>Tải Excel</Button></Space>
       </Space>
       {analysis && <Space orientation="vertical" style={{ width: '100%' }}>
@@ -76,6 +78,7 @@ function ReportPreview({ runId, onClose, onRevise }: Props) {
         </Typography.Paragraph>)}
         {analysis.chart && <><img src={analysis.chart} alt="Biểu đồ thống kê báo cáo" style={{ display: 'block', width: '100%', height: 'auto' }} />
           <Button href={analysis.chart} download="report-analysis.png">Tải biểu đồ PNG</Button></>}
+        {!analysis.chart && <Typography.Text type="secondary">Các số liệu dùng cho biểu đồ đều bằng 0 nên chưa vẽ biểu đồ.</Typography.Text>}
       </Space>}
       <Table size="small" bordered loading={loading} dataSource={data.report.rows.map((row, i) => ({ ...row, key: i }))}
         columns={fields.map((key) => ({ title: reportLabels[key] || key, dataIndex: key, width: key === 'full_name' ? 200 : 150,

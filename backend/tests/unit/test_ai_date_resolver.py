@@ -131,3 +131,18 @@ async def test_date_provider_keeps_vietnamese_number_words(monkeypatch, message,
     payload = json.loads(provider.await_args.args[1])
     assert payload["date_text"] == expected
     assert "dieu tri" not in provider.await_args.args[1]
+
+
+@pytest.mark.parametrize("message,expected", [
+    ("Xin nghỉ thứ 7", "2026-10-17"), ("xin nghỉ thứ bảy", "2026-10-17"), ("nghỉ thứ ba", "2026-10-20"),
+    ("thứ bảy tuần sau", "2026-10-24"), ("thứ 7 tuần này", "2026-10-17"),
+])
+def test_saturday_is_never_read_as_tuesday(message, expected):
+    result = dates.resolve_rule_date(message, date(2026, 10, 15))  # Thursday
+    assert (result.status, result.value) == ("RESOLVED", expected)
+
+
+def test_thu_tuc_is_not_a_weekday():
+    # "thủ tục" contains "thu tu" (thứ tư): a whole week still needs a day, without asking the provider.
+    result = dates.resolve_rule_date("Làm thủ tục, xin nghỉ tuần sau", date(2026, 10, 15))
+    assert (result.status, result.reason_code) == ("AMBIGUOUS", "DAY_REQUIRED")

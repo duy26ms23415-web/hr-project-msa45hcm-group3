@@ -18,6 +18,7 @@ MESSAGES = {
     "PDF_INVALID": "Không đọc được PDF. Hãy xuất lại file PDF và thử lại.",
     "PDF_ENCRYPTED": "PDF có mật khẩu hoặc mã hóa. Hãy tải bản không có mật khẩu.",
     "PDF_ACTIVE_CONTENT": "PDF chứa nội dung tương tác không được phép. Hãy xuất bản PDF tĩnh rồi tải lại.",
+    "PDF_ATTACHMENT_NOT_ALLOWED": "PDF có file đính kèm (ví dụ Content Credentials/C2PA hoặc tệp nhúng). Hãy xuất lại PDF không kèm file đính kèm rồi tải lại.",
     "PDF_PAGE_LIMIT": "PDF phải có từ 1 đến 100 trang. Hãy chia tài liệu thành các file nhỏ hơn.",
     "PDF_TEXT_REQUIRED": "PDF chưa có văn bản đọc được (có thể là bản scan). Hãy dùng OCR hoặc xuất PDF có văn bản trước khi tải.",
     "PDF_TEXT_LIMIT": "Văn bản PDF vượt giới hạn xử lý. Hãy chia tài liệu thành các file nhỏ hơn.",
@@ -26,7 +27,7 @@ MESSAGES = {
     "PERMISSION_DENIED": "Bạn không có quyền thực hiện yêu cầu này hoặc truy cập dữ liệu được yêu cầu. Vui lòng chọn chức năng trong phạm vi quyền của bạn.",
     "SESSION_EXPIRED": "Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại để tiếp tục.",
     "DOCUMENT_UNAVAILABLE": "Tài liệu không còn khả dụng hoặc bạn không có quyền truy cập.",
-    "REPORT_UNAVAILABLE": "Báo cáo không còn khả dụng hoặc bạn không có quyền truy cập.",
+    "REPORT_UNAVAILABLE": "Báo cáo chưa có dữ liệu (ví dụ kỳ lương chưa được HR chốt), đã hết hạn hoặc nằm ngoài quyền truy cập của bạn.",
     "REPORT_EXPIRED": "File báo cáo đã hết hạn. Vui lòng tạo báo cáo mới.",
     "DATA_SERVICE_UNAVAILABLE": "Hiện không thể truy xuất dữ liệu HR. Vui lòng thử lại sau. Báo cáo chưa được tạo.",
     "INVALID_INPUT": "Thông tin chưa hợp lệ. Vui lòng kiểm tra các trường được yêu cầu.",
@@ -69,7 +70,8 @@ def install_ai_errors(app, prefixes):
         elif status == 403:
             code = "PERMISSION_DENIED"
         elif status == 404:
-            code = "REPORT_UNAVAILABLE" if "/reports" in request.url.path else "DOCUMENT_UNAVAILABLE" if "/knowledge" in request.url.path else "PERMISSION_DENIED"
+            # A chat-created report keeps its own code: "no data yet" must not read as "no permission".
+            code = "REPORT_UNAVAILABLE" if "/reports" in request.url.path or raw == "REPORT_UNAVAILABLE" else "DOCUMENT_UNAVAILABLE" if "/knowledge" in request.url.path else "PERMISSION_DENIED"
         elif raw == "PAYROLL_CURRENCY_UNAVAILABLE":
             code = raw
         elif raw in MESSAGES and raw.startswith("ANALYSIS_") and status in {422, 503}:

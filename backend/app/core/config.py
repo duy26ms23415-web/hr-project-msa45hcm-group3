@@ -50,12 +50,28 @@ class Settings(BaseSettings):
     GEMINI_SEMANTIC_ENABLED: bool = False
     GEMINI_API_KEY: str = ""
     GEMINI_MODEL_NAME: str = "gemini-3.6-flash"
+    # Comma-separated text models used in rotation (each has its own per-minute quota);
+    # empty means GEMINI_MODEL_NAME only. Embeddings use GEMINI_EMBEDDING_MODEL.
+    GEMINI_MODEL_POOL: str = ""
+    # Per-model requests per minute this process aims to stay under (free tier Flash Lite: 15); 0 = no cap.
+    GEMINI_MODEL_RPM: int = Field(default=15, ge=0, le=10000)
     GEMINI_INTENT_TIMEOUT_SECONDS: float = Field(default=15, ge=5, le=30)
     GEMINI_POLICY_TIMEOUT_SECONDS: float = Field(default=15, ge=5, le=30)
     GEMINI_PUBLIC_SEARCH_ENABLED: bool = False
     # Upper bound kept at 45 so existing deployments still start; the shared
     # chat budget (budgeted_timeout) caps the effective value per request.
     GEMINI_PUBLIC_SEARCH_TIMEOUT_SECONDS: float = Field(default=10, ge=5, le=45)
+    # Knowledge documents (never employee records) are embedded for vector search.
+    GEMINI_EMBEDDINGS_ENABLED: bool = False
+    GEMINI_EMBEDDING_MODEL: str = "gemini-embedding-001"
+    GEMINI_EMBED_TIMEOUT_SECONDS: float = Field(default=8, ge=2, le=60)
+    # Scanned or poorly structured PDFs may be sent to Gemini to recover sections.
+    GEMINI_PDF_STRUCTURE_ENABLED: bool = False
+    GEMINI_PDF_TIMEOUT_SECONDS: float = Field(default=90, ge=10, le=300)
+    # Published chunks are labelled (prohibition/obligation/... × domain) for policy checks.
+    GEMINI_KNOWLEDGE_TAGGING_ENABLED: bool = False
+    # Cosine distance above which a vector hit is not considered evidence.
+    AI_KNOWLEDGE_VECTOR_MAX_DISTANCE: float = Field(default=0.5, gt=0, le=2)
     # Total wall-clock budget for one chat request, shared by all provider calls.
     AI_CHAT_TIMEOUT_SECONDS: float = Field(default=30, ge=10, le=60)
     AI_KNOWLEDGE_STORAGE_DIR: Path = Path(__file__).resolve().parents[2] / "storage" / "private" / "ai-knowledge"

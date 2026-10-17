@@ -61,12 +61,15 @@ def grounded_reply(answer, passages, draft_notice=False):
     Semantic paraphrasing remains model work; evidence checks are not a proof
     that every nuance of a paraphrase is correct.
     """
+    # PDF extraction keeps hard line breaks and double spaces that the model does not
+    # reproduce; the quote must still be verbatim apart from whitespace.
+    squash = lambda value: " ".join(value.split())
     selected = []
     for statement in answer.statements:
         if not 1 <= statement.source <= len(passages):
             raise ValueError("Unknown citation")
-        evidence = statement.evidence.strip()
-        if not evidence or evidence not in passages[statement.source - 1].content:
+        evidence = squash(statement.evidence)
+        if not evidence or evidence not in squash(passages[statement.source - 1].content):
             raise ValueError("Evidence is outside the authorized passage")
         numbers = lambda value: set(re.findall(r"\d+(?:[.,]\d+)*", value))
         if not numbers(statement.text) <= numbers(evidence):

@@ -16,6 +16,7 @@ from app.services.ai_access import report_scope, user_roles
 from app.services.ai_report_draft_service import AIReportDraftService
 from app.services.ai_knowledge_tool import AIKnowledgeTool
 from app.services.knowledge_retrieval import normalize
+from app.ai.parsing.lexicon import canonical
 from app.services.report_service import employee_scope
 from app.services.ai_request_security import note_data_scope
 
@@ -48,9 +49,10 @@ def mentions_employee(message):
     )
     # Recognize a capitalized short name ("cho Minh") without treating ordinary
     # reasons ("cho con đi khám") or "cho tôi" as another employee.
-    capitalized_beneficiary = re.search(
-        r"\b(?:cho|hộ|giúp)\s+(?!Tôi\b|Mình\b|Bạn\b|Con\b)"
-        r"[A-ZÀ-ỴĐ][a-zà-ỹđ]{1,}\b", message,
+    # `[A-ZÀ-Ỵ]` would also match lowercase Vietnamese letters ("giúp đơn"), so test case explicitly.
+    capitalized_beneficiary = any(
+        word[0].isupper() and len(word) > 1 and word not in {"Tôi", "Mình", "Bạn", "Con", "Em", "Tớ", "Tui"}
+        for word in re.findall(r"\b(?:cho|hộ|giúp)\s+(\w+)", message)
     )
     return bool(beneficiary or capitalized_beneficiary or employee_codes(message) or re.search(
         r"\b(?:employee[_ ]?id|nhan vien\s+(?:id|ma|\d+)\b"
@@ -58,19 +60,46 @@ def mentions_employee(message):
         r"|(?:phep|nghi|cong|luong) cua (?!toi\b|minh\b|ban than\b|nhom\b|toan cong ty\b)\w+)", text))
 
 
+_SURNAMES = "nguyen|tran|le|pham|hoang|huynh|phan|vu|vo|dang|bui|do|ho|ngo|duong|dinh|ly|truong|mai|cao|lam"
+# Common middle names: a surname followed by one of these reads as a full name even without
+# accents or capitals ("nguyen van an"), while "le duoc", "do bi", "phan tich" do not.
+_MIDDLE_NAMES = ("van|thi|duc|minh|ngoc|quoc|thanh|huu|hong|xuan|cong|dinh|trong|quang|kim|hai|tuan|anh|"
+                 "gia|bao|khanh|thu|phuong|my|nhu|tien|viet|hoai|thuy|bich|dieu|kieu|hoang|nhat|tuong")
+
+
+def names_someone_else(message):
+    """Evidence that the records asked for belong to another person.
+
+    Deliberately broad: it only decides whether an unresolved SELF reading is
+    safe, so a false positive costs one clarification question.
+    """
+    text = normalize(message)
+    return bool(
+        mentions_employee(message)
+        or re.search(rf"\b(?:{_SURNAMES})\s+(?:{_MIDDLE_NAMES})\b", text)
+        or any(following[:1].isupper() for following in re.findall(
+            r"\b(?:Nguyễn|Trần|Lê|Phạm|Hoàng|Huỳnh|Phan|Vũ|Võ|Đặng|Bùi|Đỗ|Hồ|Ngô|Dương|Đinh|Lý|Trương)\s+(\w+)", message))
+        or re.search(r"\b(?:nhan vien|dong nghiep|nguoi khac|ban ay|anh ay|chi ay|co ay|ong ay|ba ay|"
+                     r"employee|colleague|coworker|someone else)\b", text)
+    )
+
+
 def explicitly_requests_self(message):
     """Require first-person ownership/subject, not a model-inferred identity."""
-    text = normalize(message)
+    text = canonical(message)
+    # First-person forms used in chat: tôi/mình/em/tui/tớ (teencode expanded by canonical).
+    first = r"(?:toi|minh|em|tui)"
     return bool(re.search(
-        r"\b(?:cua (?:toi|minh|ban than)|"
-        r"(?:toi|minh)\s+(?:con|co|duoc|da)\s+(?:bao nhieu|may|ngay|nghi)|"
-        r"my\s+(?:(?:remaining|annual|current)\s+)*(?:leave|attendance|payslip)|"
+        r"\b(?:cua " + first + r"|cua ban than|"
+        + first + r"\s+(?:con|co|duoc|da)\s+(?:bao nhieu|may|ngay|nghi)|"
+        r"(?:xem|kiem tra|tra cuu|check)\s+(?:giup\s+|cho\s+)?" + first + r"\s+(?:so du|phep|cong|cham cong|luong|phieu luong)|"
+        r"my\s+(?:(?:remaining|annual|current)\s+)*(?:leave|attendance|payslip|timesheet|balance)|"
         r"how (?:much|many)\b.{0,40}\b(?:do|have) i)\b", text))
 
 
 def clarify(code="EMPLOYEE_QUERY_REQUIRED", reply=None):
     return AIChatResponse(
-        reply=reply or "Bạn muốn xem số dư phép hay báo cáo chấm công? Vui lòng nêu một nhân viên bằng mã nhân viên hoặc họ tên, cùng năm/kỳ cần xem.",
+        reply=reply or "Hãy nêu mã hoặc họ tên của một nhân viên trong phạm vi bạn được xem, ví dụ: “Số dư phép của EMP003”. Để xem cả nhóm, hãy tạo báo cáo nhóm.",
         status="NEEDS_INPUT", message_code=code,
     )
 
@@ -154,7 +183,8 @@ async def permission_reply(db, actor, today):
     )
 
 
-async def answer_employee_query(db, actor, req, today, *, required=True, interpretation=None):
+async def answer_employee_query(db, actor, req, today, *, required=True, interpretation=None, resolved=None):
+    """resolved, when given, receives the employee code that was actually read (for follow-ups)."""
     if actor is None or db is None:
         if not required:
             return None
@@ -172,7 +202,9 @@ async def answer_employee_query(db, actor, req, today, *, required=True, interpr
     if query.intent == "NOT_EMPLOYEE_QUERY":
         return clarify() if required else None
     if query.intent == "CLARIFY" or not query.employee_reference:
-        return clarify()
+        # An opportunistic check that found no named employee must not swallow team
+        # reports or other routes; nothing was read, and later routes check scope again.
+        return clarify() if required else None
     reference = query.employee_reference.strip()
     # A model cannot select a person absent from the actual user request.
     if not name_words(reference) or not re.search(r"(?<!\w)" + re.escape(name_words(reference)) + r"(?!\w)", name_words(req.message)) or len(reference) < 2:
@@ -189,6 +221,8 @@ async def answer_employee_query(db, actor, req, today, *, required=True, interpr
         choices = "; ".join(f"{employee.employee_code} — {employee.full_name}" for employee in employees[:5])
         return clarify("EMPLOYEE_AMBIGUOUS", f"Có nhiều nhân viên phù hợp: {choices}. Vui lòng gửi lại yêu cầu kèm mã của một nhân viên.")
     target = employees[0]
+    if resolved is not None:
+        resolved.append(target.employee_code)
     if query.intent == "REPORT_ATTENDANCE":
         response = await AIReportDraftService.start(db, actor, req.message, today, {
             "kind": "ATTENDANCE", "scope": scope, "employee_id": target.employee_id,

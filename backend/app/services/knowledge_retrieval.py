@@ -29,6 +29,9 @@ class Passage:
     heading: str | None = None
     page_start: int | None = None
     page_end: int | None = None
+    chunk_id: int | None = None
+    rule_type: str | None = None
+    applies_to: list[str] | None = None
 
 
 def _field(record, name, default=None):

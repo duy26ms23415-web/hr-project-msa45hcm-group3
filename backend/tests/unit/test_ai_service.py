@@ -514,12 +514,12 @@ async def test_space_separated_date_advances_owner_bound_draft(monkeypatch):
     update = AsyncMock(return_value=draft)
     monkeypatch.setattr(AIDraftService, "update_draft", update)
     result = await AIService.process_chat(
-        None, 7, AIChatRequest(message="10 08 2025", draft_id=draft.draft_id, draft_revision=1),
+        None, 7, AIChatRequest(message="11 08 2025", draft_id=draft.draft_id, draft_revision=1),
         {"EMPLOYEE"}, owner_user_account_id=9,
     )
     assert result.missing_fields == ["session", "leave_type_id", "reason"]
-    assert "10/08/2025" in result.reply
-    update.assert_awaited_once_with(None, draft.draft_id, 9, {"leave_date": "2025-08-10"},
+    assert "11/08/2025" in result.reply
+    update.assert_awaited_once_with(None, draft.draft_id, 9, {"leave_date": "2025-08-11"},
                                    ["session", "leave_type_id", "reason"])
 
 

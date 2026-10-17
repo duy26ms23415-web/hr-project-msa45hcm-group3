@@ -21,13 +21,11 @@ from app.core.authorization import capabilities, known_roles
 from app.services.ai_role_scopes import scoped_ai_access
 from app.models.knowledge import KnowledgeDocument, KnowledgeDocumentVersion, KnowledgeSection
 from app.services.ai_request_security import secured_operation
-from app.services.ai_suggestions import SUGGESTIONS, section_unavailability, suggestion_allowed, unique_visible_sections
+from app.services.ai_suggestions import SUGGESTIONS, fallback_references, section_unavailability, suggestion_allowed, unique_visible_sections
 from app.services.ai_report_draft_service import suggestion_report_defaults
 from app.services.report_catalog import report_catalog
 from app.services.report_run_service import ReportRunService
 from app.schemas.reports import ReportRunCreate, ReportRunCreateResponse
-from app.services.ai_knowledge_tool import AIKnowledgeTool
-from app.services.knowledge_retrieval import retrieve
 
 logger = logging.getLogger(__name__)
 
@@ -130,7 +128,6 @@ async def get_suggestions(
     # support the same prompts without carrying seed-specific identifiers.
     missing = {item[0] for item in citation_specs if item[0] not in references and item[2] not in ambiguous_codes}
     if missing:
-        documents = await AIKnowledgeTool.documents(db, roles, today)
         reference_queries = {
             "leave_policy": SUGGESTIONS["leave_policy"].prompt,
             "attendance_policy": SUGGESTIONS["attendance_policy"].prompt,
@@ -138,21 +135,14 @@ async def get_suggestions(
             "leave_request": SUGGESTIONS["draft_leave"].prompt,
             "report_export": SUGGESTIONS["team_attendance_report"].prompt,
         }
-        for suggestion_id in missing:
-            passage = next(iter(retrieve(reference_queries[suggestion_id], documents)), None)
-            if passage is None:
-                reason = "DOCUMENT_NOT_FOUND" if not documents else "SECTION_NOT_ANSWERABLE"
-                logger.debug(json.dumps({"event": "ai_suggestion_visibility", "suggestion_id": suggestion_id, "reason": reason}))
+        # Any published PDF can back a suggestion: hybrid search finds the matching
+        # section (cached until the published set changes).
+        found = await fallback_references(db, roles, allowed_roles, today,
+                                          {suggestion_id: reference_queries[suggestion_id] for suggestion_id in sorted(missing)})
+        for suggestion_id, source in found.items():
+            if source is None:
+                logger.debug(json.dumps({"event": "ai_suggestion_visibility", "suggestion_id": suggestion_id, "reason": "DOCUMENT_NOT_FOUND"}))
                 continue
-            source = AISource(
-                document_id=passage.document_id, title=passage.title, excerpt="",
-                source_url=passage.source_url if passage.version_id is None else None,
-                version_id=passage.version_id, section_id=passage.section_id,
-                section_code=passage.section_code, heading=passage.heading,
-                page_start=passage.page_start, page_end=passage.page_end,
-                viewer_path=(f"/knowledge/view/{passage.document_id}?version={passage.version_id}&section={passage.section_id}"
-                             if passage.version_id and passage.section_id and passage.page_start else None),
-            )
             references[suggestion_id] = source
             if suggestion_id in policy_ids:
                 suggestions.append(AISuggestion(suggestion_id=suggestion_id,
