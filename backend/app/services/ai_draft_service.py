@@ -15,7 +15,8 @@ DRAFT_TTL = timedelta(minutes=15)
 COMMAND_FIELDS = {
     "DRAFT_LEAVE": frozenset({"leave_date", "session", "leave_type_id", "reason"}),
     "DRAFT_FIX": frozenset({"work_date", "event_type", "reason", "requested_time"}),
-    "DRAFT_REPORT": frozenset({"kind", "start_date", "end_date", "scope", "department_id", "employee_id"}),
+    # purpose=ANALYZE: the finished report is answered with statistics/chart, not only the file.
+    "DRAFT_REPORT": frozenset({"kind", "start_date", "end_date", "scope", "department_id", "employee_id", "purpose"}),
 }
 REQUIRED_FIELDS = {**COMMAND_FIELDS, "DRAFT_REPORT": frozenset({"kind", "start_date", "end_date", "scope"})}
 
@@ -57,6 +58,8 @@ class AIDraftService:
                     if value not in REPORT_NAMES:
                         raise ValueError()
                 elif key == "scope" and value not in {"SELF", "DIRECT_REPORTS", "COMPANY"}:
+                    raise ValueError()
+                elif key == "purpose" and value != "ANALYZE":
                     raise ValueError()
         except (ValueError, TypeError) as exc:
             raise HTTPException(status_code=422, detail="AI_DRAFT_FIELD_INVALID") from exc

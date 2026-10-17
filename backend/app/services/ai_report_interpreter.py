@@ -13,6 +13,32 @@ from app.services.knowledge_retrieval import normalize
 from app.services.report_catalog import report_catalog
 
 
+_DAY_RANGE = re.compile(
+    r"\b(?:tu\s+(?:ngay\s+)?|ngay\s+)(\d{1,2})(?:/(\d{1,2})(?:/(\d{4}))?)?"
+    r"\s*(?:den|toi|-)\s*(?:ngay\s+)?(\d{1,2})(?:/(\d{1,2})(?:/(\d{4}))?)?\b")
+
+
+def _day_range(text, today, params):
+    """"Từ ngày 1 đến ngày 10" / "từ 1/9 đến 10/9"; a bare day keeps the month being edited."""
+    match = _DAY_RANGE.search(text)
+    if not match:
+        return None
+    base = date.fromisoformat((params or {}).get("start_date") or today.replace(day=1).isoformat())
+    if "thang truoc" in text:
+        base = today.replace(day=1) - timedelta(days=1)
+    elif "thang nay" in text:
+        base = today
+    d1, m1, y1, d2, m2, y2 = match.groups()
+    month1 = int(m1 or m2 or base.month)
+    year1 = int(y1 or y2 or base.year)
+    try:
+        start = date(year1, month1, int(d1))
+        end = date(int(y2 or year1), int(m2 or month1), int(d2))
+    except ValueError:
+        return None
+    return (start, end) if start <= end else None
+
+
 def report_answers(message, today, params=None, missing=()):
     text = normalize(message)
     answers = {}
@@ -47,6 +73,8 @@ def report_answers(message, today, params=None, missing=()):
             field = next((key for key in missing if key in {"start_date", "end_date"}), None)
         if field:
             answers[field] = dates[0]
+    elif day_range := _day_range(text, today, params):
+        answers.update(start_date=day_range[0].isoformat(), end_date=day_range[1].isoformat())
     else:
         end = None
         if "thang truoc" in text:

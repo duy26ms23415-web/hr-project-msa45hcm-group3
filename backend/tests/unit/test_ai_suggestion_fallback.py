@@ -21,7 +21,8 @@ async def test_published_readable_section_supports_policy_suggestion_without_dem
     db = AsyncMock()
     empty = SimpleNamespace(mappings=lambda: SimpleNamespace(all=lambda: []))
     scope_rows = SimpleNamespace(scalars=lambda: SimpleNamespace(all=lambda: []))
-    db.execute.side_effect = [scope_rows, empty, empty]
+    stamp = SimpleNamespace(one=lambda: (1, None, 32))
+    db.execute.side_effect = [scope_rows, empty, stamp, empty]
     app.dependency_overrides[get_current_user] = lambda: actor
     app.dependency_overrides[get_db] = lambda: db
     visible = [{
@@ -31,7 +32,13 @@ async def test_published_readable_section_supports_policy_suggestion_without_dem
         "section_id": 33, "section_code": "HR-POLICY-LEAVE", "heading": "Nghỉ phép năm",
         "page_start": 2, "page_end": 2, "is_answerable": True,
     }]
-    monkeypatch.setattr(ai.AIKnowledgeTool, "documents", AsyncMock(return_value=visible))
+    from app.services import ai_suggestions
+    from app.services.ai_knowledge_tool import AIKnowledgeTool
+    ai_suggestions._reference_cache.clear()
+    monkeypatch.setattr(AIKnowledgeTool, "documents", AsyncMock(return_value=visible))
+    # Not chunked yet (pre-reindex): served by the lexical path over section rows.
+    from app.services import ai_knowledge_tool
+    monkeypatch.setattr(ai_knowledge_tool, "hybrid_search", AsyncMock(return_value=[]))
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.get("/ai/suggestions")
     assert response.status_code == 200

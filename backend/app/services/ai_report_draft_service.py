@@ -74,6 +74,11 @@ def revised_report_params(current, answers):
     return params
 
 
+def run_params(params):
+    """Draft fields that are ReportRunCreate filters (purpose only steers the reply)."""
+    return {key: value for key, value in params.items() if key != "purpose"}
+
+
 class AIReportDraftService:
     @staticmethod
     def validate_access(user, params):
@@ -93,8 +98,10 @@ class AIReportDraftService:
     @staticmethod
     async def start(db, user, message, today, initial=None):
         AIReportDraftService.validate_access(user, {})
-        params = {**await interpret_report_prompt(message, today, user, initial),
-                  **report_answers(message, today, initial), **(initial or {})}
+        # A period already resolved from the understood request needs no second model call.
+        known_period = bool(initial) and {"start_date", "end_date"} <= initial.keys()
+        interpreted = {} if known_period else await interpret_report_prompt(message, today, user, initial)
+        params = {**interpreted, **report_answers(message, today, initial), **(initial or {})}
         if params.get("kind") == "HEADCOUNT":
             params.setdefault("start_date", today.isoformat())
             params.setdefault("end_date", today.isoformat())
@@ -107,8 +114,8 @@ class AIReportDraftService:
             # reuse the exact persisted run without creating a second one.
             run_id = uuid5(NAMESPACE_URL, f"hr-ai-report-draft:{draft.draft_id}").hex
             run = await authorized_run(db, user, run_id)
-            req = ReportRunCreate.model_validate(draft.typed_params)
-            return AIReportDraftService.completed_response(draft, req, run)
+            req = ReportRunCreate.model_validate(run_params(draft.typed_params))
+            return await AIReportDraftService.finished(db, user, draft, req, run)
         return await AIReportDraftService.finish_or_ask(db, user, draft)
 
     @staticmethod
@@ -125,9 +132,18 @@ class AIReportDraftService:
         AIDraftService._validate_command_and_params("DRAFT_REPORT", params)
         AIReportDraftService.validate_access(user, params)
         missing = [key for key in REQUIRED if key not in params]
+        asked = draft.missing_fields[0] if draft.missing_fields else None
         if answers or missing != draft.missing_fields:
             draft = await AIDraftService.update_draft(db, draft.draft_id, user.user_account_id, params, missing)
-        return await AIReportDraftService.finish_or_ask(db, user, draft)
+        # Say what was understood instead of silently repeating the same question.
+        if not answers:
+            prefix = "Tôi chưa nhận ra thông tin cho bước này. "
+        elif asked and asked not in answers:
+            noted = {"scope": "phạm vi", "kind": "loại báo cáo", "start_date": "kỳ báo cáo", "end_date": "kỳ báo cáo"}
+            prefix = "Đã ghi nhận " + ", ".join(dict.fromkeys(noted.get(key, key) for key in answers)) + ". "
+        else:
+            prefix = ""
+        return await AIReportDraftService.finish_or_ask(db, user, draft, prefix=prefix)
 
     @staticmethod
     async def revise_run(db, user, run_id, message, today):
@@ -153,7 +169,7 @@ class AIReportDraftService:
         return await AIReportDraftService.start(db, user, "", today, params)
 
     @staticmethod
-    async def finish_or_ask(db, user, draft):
+    async def finish_or_ask(db, user, draft, prefix=""):
         # Reject a completed draft before ReportRunService can commit a new
         # snapshot in its independent storage transaction.
         if draft.status != "COLLECTING":
@@ -169,18 +185,33 @@ class AIReportDraftService:
                 definition = next(item for item in definitions if item["kind"] == draft.typed_params["kind"])
                 labels = {"SELF": "Bản thân", "DIRECT_REPORTS": "Nhân viên trực tiếp", "COMPANY": "Toàn công ty"}
                 options = [{"field": field, "value": scope, "label": labels[scope]} for scope in definition["scopes"]]
-            return AIChatResponse(reply=QUESTIONS[field], draft_id=draft.draft_id, draft_revision=draft.revision, missing_fields=draft.missing_fields, input_options=options, message_code=f"REPORT_{field.upper()}_REQUIRED")
+            hint = " Gửi “hủy” nếu bạn muốn dừng báo cáo này." if prefix.startswith("Tôi chưa nhận ra") else ""
+            return AIChatResponse(reply=prefix + QUESTIONS[field] + hint, draft_id=draft.draft_id, draft_revision=draft.revision, missing_fields=draft.missing_fields, input_options=options, message_code=f"REPORT_{field.upper()}_REQUIRED")
         try:
-            req = ReportRunCreate.model_validate(draft.typed_params)
+            req = ReportRunCreate.model_validate(run_params(draft.typed_params))
         except ValidationError as exc:
             raise HTTPException(422, "INVALID_INPUT") from exc
         result = await ReportRunService.create(db, user, req, source_draft_id=draft.draft_id)
         await AIDraftService.mark_ready(db, draft.draft_id, user.user_account_id)
-        return AIReportDraftService.completed_response(draft, req, result["run"])
+        return await AIReportDraftService.finished(db, user, draft, req, result["run"])
+
+    @staticmethod
+    async def finished(db, user, draft, req, run):
+        """A chart/statistics request is answered with the analysis of the new run."""
+        response = AIReportDraftService.completed_response(draft, req, run)
+        if draft.typed_params.get("purpose") != "ANALYZE":
+            return response
+        from app.services.ai_analysis_tool import AIAnalysisTool, analysis_summary
+        analysis = await AIAnalysisTool.execute(db, user, run.run_id)
+        return response.model_copy(update={
+            "reply": analysis_summary(analysis),
+            "report_analysis": {key: analysis.get(key) for key in ("row_count", "metrics", "frequencies", "chart")},
+            "message_code": "REPORT_ANALYZED",
+        })
 
     @staticmethod
     def completed_response(draft, req, run):
         scope_label = {"SELF": "bản thân", "DIRECT_REPORTS": "nhân viên trực tiếp", "COMPANY": "toàn công ty"}[req.scope]
         if req.employee_id is not None:
             scope_label = "nhân viên đã chọn"
-        return AIChatResponse(reply=f"Đã tạo báo cáo từ {req.start_date:%d/%m/%Y} đến {req.end_date:%d/%m/%Y}, phạm vi {scope_label}. Bạn có thể xem trước và tải Excel.", action=AIChatAction(action_type="OPEN_REPORT", data={"path": "/reports", **draft.typed_params, "run_id": run.run_id}))
+        return AIChatResponse(reply=f"Đã tạo báo cáo từ {req.start_date:%d/%m/%Y} đến {req.end_date:%d/%m/%Y}, phạm vi {scope_label}. Bạn có thể xem trước và tải Excel.", action=AIChatAction(action_type="OPEN_REPORT", data={"path": "/reports", **run_params(draft.typed_params), "run_id": run.run_id}))

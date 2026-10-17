@@ -68,11 +68,36 @@ def _multiple_dates(text: str) -> bool:
         or (is_alternative and len(set(relative_dates)) > 1)
     )
 
-def resolve_rule_date(message: str, today: date) -> DateResolution | None:
+def leave_range(message: str, today: date) -> list[date] | None:
+    """Working days (Mon–Fri) of "từ thứ 2 đến thứ 5 tuần sau" / "từ 19/10 đến 22/10"; None if not a range."""
+    text = re.sub(r"\bthu\s*([2-7])\b", lambda m: "thu " +
+                  {"2": "hai", "3": "ba", "4": "tu", "5": "nam", "6": "sau", "7": "bay"}[m[1]], normalize(message))
+    match = re.search(r"\btu\s+(.+?)\s+(?:den|toi)\s+(.+)$", text)
+    if not match:
+        return None
+    week = re.search(r"\btuan\s+(?:nay|sau|toi|truoc)\b", text)
+    sides = []
+    for side in match.groups():
+        if week and week[0] not in side:
+            side = f"{side} {week[0]}"
+        resolved = resolve_rule_date(side, today)
+        if not resolved or resolved.status != "RESOLVED":
+            return None
+        sides.append(date.fromisoformat(resolved.value))
+    start, end = sides
+    if end < start or (end - start).days > 31:
+        return None
+    return [start + timedelta(days=i) for i in range((end - start).days + 1) if (start + timedelta(days=i)).weekday() < 5]
+
+
+def resolve_rule_date(message: str, today: date, bare_weekday: Literal["future", "past"] = "future") -> DateResolution | None:
     text = normalize(message)
     text = re.sub(r"\bthu\s*([2-7])\b", lambda m: "thu " +
                   {"2": "hai", "3": "ba", "4": "tu", "5": "nam", "6": "sau", "7": "bay"}[m[1]], text)
-    if re.search(r"\b(?:mot ngay nao do|tuan dau tien thang|tuan dau tien trong thang)\b", text) and not any(w in text for w in WEEKDAYS):
+    # "Nghỉ tuần sau" names a week, not a day: ask instead of letting the interpreter pick one.
+    whole_week = bool(re.search(r"\btuan\s+(?:nay|sau|toi|truoc)\b", text)) and not re.search(r"\d", text)
+    if (re.search(r"\b(?:mot ngay nao do|tuan dau tien thang|tuan dau tien trong thang)\b", text) or whole_week) \
+            and not any(w in text for w in WEEKDAYS):
         return DateResolution("AMBIGUOUS", None, "RULE", "DAY_REQUIRED")
     if _multiple_dates(text):
         return DateResolution("AMBIGUOUS", None, "RULE", "MULTIPLE_DATES")
@@ -120,14 +145,21 @@ def resolve_rule_date(message: str, today: date) -> DateResolution | None:
             if week:
                 shift = 7 if week[1] in {"sau", "toi"} else -7 if week[1] == "truoc" else 0
                 return _result(today + timedelta(days=weekday - today.weekday() + shift))
+            # A bare weekday is the next one for leave and the latest one for an attendance fix;
+            # the reply echoes the resolved date so the user can correct it.
+            if re.search(r"\b(?:tuan|thang)\b", text):
+                continue  # "tuần liền kề", "tháng sau"…: leave vaguer phrases to the interpreter.
+            if bare_weekday == "past":
+                return _result(today - timedelta(days=(today.weekday() - weekday) % 7))
+            return _result(today + timedelta(days=(weekday - today.weekday()) % 7 or 7))
     if re.search(r"\b(?:ngay|thu|tuan|thang|hom|mai)\b", text):
         return DateResolution("AMBIGUOUS", None, "RULE", "EXACT_DATE_REQUIRED")
     return None
 
 
 async def resolve_date(message: str, today: date, context: DateContext) -> DateResolution:
-    del context  # The caller chooses the draft field; provider cannot change it.
-    local = resolve_rule_date(message, today)
+    # The caller chooses the draft field; provider cannot change it. It only sets the bare-weekday direction.
+    local = resolve_rule_date(message, today, "past" if context.field == "work_date" else "future")
     if local and local.status in {"RESOLVED", "INVALID"}:
         record("interpret_date", "SKIPPED_DETERMINISTIC")
         return local

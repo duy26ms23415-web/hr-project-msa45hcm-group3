@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 import pytest
@@ -8,6 +8,7 @@ from sqlalchemy.dialects import postgresql
 from app.api.deps import get_current_user
 from app.core.database import get_db
 from app.api.v1.endpoints import ai, attendance, knowledge, leaves, reports
+from app.services import knowledge_versions
 from app.schemas.ai import AIChatResponse
 
 
@@ -25,12 +26,18 @@ def test_archived_pdf_preview_is_editor_only_and_retains_role_limits(role, previ
     assert knowledge._version_readable(user, document, version, 2, preview) is False
 
 
-def test_automatic_pdf_sections_use_numbered_headings_for_precise_links():
+@pytest.mark.asyncio
+async def test_automatic_pdf_sections_use_numbered_headings_for_precise_links():
+    from app.services.knowledge_ingest.pipeline import build_sections
     page = "HR POLICY LIBRARY\n1. Đối tượng áp dụng\nNội dung\n2. Quy trình xin nghỉ phép\nNội dung phép năm"
-    sections = knowledge._automatic_sections([page])
-    assert [section.heading for section in sections] == ["1. Đối tượng áp dụng", "2. Quy trình xin nghỉ phép"]
-    assert [section.section_code for section in sections] == ["PAGE_1_SECTION_1", "PAGE_1_SECTION_2"]
-    assert len(knowledge._validate_sections(sections, [page])) == 2
+    # Not a real PDF: layout parsing falls back to the extracted page text.
+    result = await build_sections(b"%PDF-1.4 text-only", [page])
+    by_heading = {section.heading: section for section in result.sections}
+    assert ["1. Đối tượng áp dụng", "2. Quy trình xin nghỉ phép"] == [h for h in by_heading if h[0].isdigit()]
+    # Each heading owns only its own text; sections no longer copy the whole page.
+    assert by_heading["2. Quy trình xin nghỉ phép"].content == "2. Quy trình xin nghỉ phép\nNội dung phép năm"
+    assert "phép năm" not in by_heading["1. Đối tượng áp dụng"].content
+    assert len({section.section_code for section in result.sections}) == len(result.sections)
 
 
 @pytest.mark.asyncio
@@ -80,10 +87,14 @@ async def test_restore_pdf_creates_new_draft_with_same_file_and_sections(api_con
     document = SimpleNamespace(document_id=1, current_version_id=2, title="Policy", content="Body", source_url=None,
                                status="ARCHIVED", minimum_role="EMPLOYEE", updated_at=datetime.now(timezone.utc))
     source = SimpleNamespace(version_id=2, minimum_role="EMPLOYEE", status="ARCHIVED", storage_key="original.pdf", sha256="hash",
-                             byte_size=20, page_count=2, mime_type="application/pdf", effective_from=None, effective_to=None)
-    section = SimpleNamespace(section_code="LEAVE", heading="Nghỉ phép", page_start=1, page_end=2, anchor="Nghỉ phép", content="Body", is_answerable=True)
+                             byte_size=20, page_count=2, mime_type="application/pdf", effective_from=None, effective_to=None,
+                             extraction_method="LAYOUT")
+    section = SimpleNamespace(section_code="LEAVE", heading="Nghỉ phép", page_start=1, page_end=2, anchor="Nghỉ phép", content="Body",
+                              is_answerable=True, level=1, heading_path="Nghỉ phép")
     db.scalar.side_effect = [document, source, 3]
-    db.scalars.side_effect = [SimpleNamespace(all=lambda: [section]), SimpleNamespace(all=lambda: [source])]
+    # Second query: the restored draft's sections, re-read for chunking.
+    db.scalars.side_effect = [SimpleNamespace(all=lambda: [section]), SimpleNamespace(all=lambda: []),
+                              SimpleNamespace(all=lambda: [source])]
     def add(value):
         if isinstance(value, KnowledgeDocumentVersion):
             value.version_id = 4
@@ -310,16 +321,17 @@ async def test_draft_mapping_validation_happens_before_replacing_sections(monkey
     from app.schemas.knowledge import KnowledgeSectionInput
     db = AsyncMock()
     db.add = Mock()
-    version = SimpleNamespace(version_id=2, storage_key="safe.pdf", sha256="hash", page_count=1)
-    monkeypatch.setattr(knowledge, "resolve_storage_path", lambda key: SimpleNamespace(read_bytes=lambda: b"pdf"))
-    monkeypatch.setattr(knowledge, "parse_pdf", lambda raw: SimpleNamespace(sha256="hash", pages=["Actual heading\nCompany policy"]))
+    db.scalars.return_value = SimpleNamespace(all=lambda: [])
+    version = SimpleNamespace(version_id=2, storage_key="safe.pdf", sha256="hash", page_count=1, extraction_method="LAYOUT", title="Policy")
+    monkeypatch.setattr(knowledge_versions, "resolve_storage_path", lambda key: SimpleNamespace(read_bytes=lambda: b"pdf"))
+    monkeypatch.setattr(knowledge_versions, "parse_pdf", lambda raw, **_: SimpleNamespace(sha256="hash", pages=["Actual heading\nCompany policy"]))
     from fastapi import HTTPException
     with pytest.raises(HTTPException) as exc:
-        await knowledge._replace_draft_sections(db, version, [KnowledgeSectionInput(section_code="P1", heading="False heading", page_start=1, page_end=1)])
+        await knowledge_versions.replace_draft_sections(db, version, [KnowledgeSectionInput(section_code="P1", heading="False heading", page_start=1, page_end=1)])
     assert exc.value.status_code == 422
     db.execute.assert_not_called()
     db.add.assert_not_called()
-    await knowledge._replace_draft_sections(db, version, [KnowledgeSectionInput(section_code="P1", heading="Actual heading", page_start=1, page_end=1, is_answerable=False)])
+    await knowledge_versions.replace_draft_sections(db, version, [KnowledgeSectionInput(section_code="P1", heading="Actual heading", page_start=1, page_end=1, is_answerable=False)])
     assert db.add.call_args.args[0].is_answerable is False
     assert db.add.call_args.args[0].content == "Actual heading\nCompany policy"
 
@@ -494,7 +506,8 @@ async def test_one_step_upload_defaults_to_employee_and_creates_draft_version(ap
                 item.version_id = 9; item.created_at = datetime.now(timezone.utc)
     db.flush.side_effect = flush
     db.scalar.side_effect = lambda statement: 0 if "max(" in str(statement) else next(item for item in saved if isinstance(item, KnowledgeDocument))
-    monkeypatch.setattr(knowledge, "store_pdf", Mock(return_value="a" * 32 + ".pdf"))
+    db.scalars.return_value = SimpleNamespace(all=lambda: [item for item in saved if isinstance(item, KnowledgeSection)])
+    monkeypatch.setattr(knowledge_versions, "store_pdf", Mock(return_value="a" * 32 + ".pdf"))
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.post("/ai/knowledge/upload", files={"file": ("Policy.pdf", output.getvalue(), "application/pdf")})
     assert response.status_code == 201, response.text
@@ -517,11 +530,12 @@ async def test_one_step_upload_rejects_privileged_role_before_writes(api_context
     db.add.assert_not_called()
 
 
-def test_automatic_sections_skip_blank_pages_without_changing_page_numbers():
-    sections = knowledge._automatic_sections(["Title\nBody", " ", "Second page\nContent"])
-    assert [(section.page_start, section.page_end) for section in sections] == [(1, 1), (3, 3)]
-    assert [section.section_code for section in sections] == ["PAGE_1", "PAGE_3"]
-    assert knowledge._validate_sections(sections, ["Title\nBody", " ", "Second page\nContent"])
+@pytest.mark.asyncio
+async def test_automatic_sections_skip_blank_pages_without_changing_page_numbers():
+    from app.services.knowledge_ingest.pipeline import build_sections
+    result = await build_sections(b"%PDF-1.4 text-only", ["Title\nBody", " ", "Second page\nContent"])
+    assert result.method == "PAGE"
+    assert [(section.page_start, section.page_end) for section in result.sections] == [(1, 1), (3, 3)]
 
 
 @pytest.mark.asyncio
@@ -548,7 +562,7 @@ async def test_duplicate_published_policy_sections_keep_suggestion_without_wrong
 @pytest.mark.asyncio
 async def test_headcount_suggestion_is_hidden_for_employee_and_visible_to_manager(api_context):
     app, user, db = api_context
-    db.execute.return_value = SimpleNamespace(mappings=lambda: SimpleNamespace(all=lambda: []))
+    db.execute.return_value = SimpleNamespace(mappings=lambda: SimpleNamespace(all=lambda: []), one=lambda: (0, None, 0))
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         employee = await client.get("/ai/suggestions")
         assert employee.status_code == 200
@@ -589,3 +603,24 @@ async def test_employee_cannot_view_approval_queue(api_context, url):
         response = await client.get(url)
     assert response.status_code == 403
     db.execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_suggestion_fallback_search_is_cached_until_the_published_set_changes(monkeypatch):
+    from app.services import ai_suggestions
+    from app.services.ai_knowledge_tool import AIKnowledgeTool
+    ai_suggestions._reference_cache.clear()
+    search = AsyncMock(return_value=[])
+    monkeypatch.setattr(AIKnowledgeTool, "search", search)
+    db = AsyncMock()
+    stamp = [(3, "t1", 30)]
+    db.execute.side_effect = lambda statement: SimpleNamespace(one=lambda: stamp[0])
+    queries = {"leave_policy": "nghỉ phép", "report_export": "báo cáo"}
+    for _ in range(3):
+        await ai_suggestions.fallback_references(db, {"EMPLOYEE"}, ["EMPLOYEE"], date(2026, 10, 17), queries)
+    assert search.await_count == 2  # first request only
+    stamp[0] = (4, "t2", 41)  # a document was published
+    await ai_suggestions.fallback_references(db, {"EMPLOYEE"}, ["EMPLOYEE"], date(2026, 10, 17), queries)
+    assert search.await_count == 4
+    await ai_suggestions.fallback_references(db, {"HR"}, ["EMPLOYEE", "MANAGER", "HR"], date(2026, 10, 17), queries)
+    assert search.await_count == 6  # other visibility class never shares entries

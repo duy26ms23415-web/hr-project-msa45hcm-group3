@@ -1,11 +1,13 @@
 """Closed intent-to-tool mapping; model output never names Python callables or SQL."""
 
+import re
 from dataclasses import dataclass
 from datetime import date
 from typing import Any, Awaitable, Callable
 
 from fastapi import HTTPException
 
+from app.ai.parsing.personal import asks_lateness, week_period
 from app.core.authorization import require_capability
 from app.schemas.ai import AIChatAction, AIChatRequest, AIChatResponse
 from app.services.ai_employee_tool import AIEmployeeTool
@@ -22,6 +24,8 @@ class ToolContext:
     roles: set[str]
     request: AIChatRequest
     today: date
+    # Understood slot values (text) for this action; handlers re-validate them.
+    hints: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -42,20 +46,64 @@ async def _leave_balance(ctx: ToolContext) -> AIChatResponse:
                           action=AIChatAction(action_type="SHOW_DATA", data={"type": "LEAVE_BALANCE", "balance": balance}))
 
 
-async def _attendance_summary(ctx: ToolContext) -> AIChatResponse:
-    period = report_answers(ctx.request.message, ctx.today)
-    start = date.fromisoformat(period["start_date"]) if period.get("start_date") else ctx.today.replace(day=1)
-    end = date.fromisoformat(period["end_date"]) if period.get("end_date") else ctx.today
-    if "hom nay" in normalize(ctx.request.message):
-        start = end = ctx.today
+_DAY_STATUS = {"PRESENT": "đủ công", "HALF_DAY": "nửa công", "INCOMPLETE": "thiếu lượt chấm công", "ABSENT": "vắng",
+               "ON_LEAVE": "nghỉ phép", "REMOTE": "làm việc từ xa", "HOLIDAY": "ngày lễ"}
+
+
+def attendance_period(message: str, today: date) -> tuple[date, date]:
+    """Single day ("hôm qua", "15/10") > week > month wording > month to date."""
+    from app.services.ai_service import requested_date
+    text = normalize(message)
+    single = requested_date(message, today) if not re.search(r"\b(?:thang|tuan) (?:nay|truoc)\b", text) else None
+    if single:
+        start = end = date.fromisoformat(single)
+    elif week := week_period(text, today):
+        start, end = week
+    else:
+        period = report_answers(message, today)
+        start = date.fromisoformat(period["start_date"]) if period.get("start_date") else today.replace(day=1)
+        end = date.fromisoformat(period["end_date"]) if period.get("end_date") else today
+    end = min(end, today)
     if end < start or start.year != end.year:
         raise HTTPException(422, "INVALID_INPUT")
+    return start, end
+
+
+def attendance_reply(result: dict, start: date, end: date, lateness: bool) -> str:
+    if start == end:
+        day = next(iter(result.get("days") or []), None)
+        if day is None:
+            lines = [f"Ngày {start:%d/%m/%Y}: chưa có dữ liệu chấm công."]
+        else:
+            lines = [f"Ngày {start:%d/%m/%Y}: **{_DAY_STATUS.get(day['status'], day['status'])}**.",
+                     f"- Check-in: {day['check_in'] or 'chưa ghi nhận'}",
+                     f"- Check-out: {day['check_out'] or 'chưa ghi nhận'}"]
+    else:
+        counts = result.get("status_counts") or {"PRESENT": result["present_days"], "INCOMPLETE": len(result["incomplete_dates"])}
+        recorded = result.get("recorded_days")
+        if recorded == 0:
+            return f"Từ {start:%d/%m/%Y} đến {end:%d/%m/%Y}: chưa có dữ liệu chấm công nào được ghi nhận."
+        lines = [f"Chấm công từ {start:%d/%m/%Y} đến {end:%d/%m/%Y}" + (f" ({recorded} ngày có dữ liệu):" if recorded is not None else ":")]
+        lines += [f"- {_DAY_STATUS[status].capitalize()}: **{counts[status]}** ngày" for status in _DAY_STATUS if counts.get(status)]
+        incomplete = [date.fromisoformat(value).strftime("%d/%m") for value in result["incomplete_dates"]]
+        if incomplete:
+            lines.append(f"Các ngày thiếu lượt: {', '.join(incomplete)}. Bạn có thể tạo giải trình cho những ngày này.")
+    if lateness:
+        # Lateness rules are still undecided (PROJECT_CONTEXT §7): show recorded times only.
+        lines.append("Hệ thống chưa có quy tắc đi muộn/về sớm chính thức nên tôi không tự đếm số lần đi muộn. "
+                     "Giờ check-in/check-out từng ngày có trong màn hình Chấm công.")
+    lines.append("Đây là dữ liệu đã ghi nhận, chưa phải kết quả chốt công.")
+    return "\n".join(lines)
+
+
+async def _attendance_summary(ctx: ToolContext) -> AIChatResponse:
+    start, end = attendance_period(ctx.request.message, ctx.today)
     result = await AIEmployeeTool.get_context(ctx.db, ctx.employee_id, ctx.today,
                                               attendance_start=start, attendance_end=end)
     incomplete = result["incomplete_dates"]
     sources = await AIKnowledgeTool.sources(ctx.db, ctx.roles, ctx.today, "quy định chấm công")
     return AIChatResponse(
-        reply=f"Từ {start:%d/%m/%Y} đến {end:%d/%m/%Y}: {result['present_days']} ngày đủ lượt công; các ngày thiếu lượt: {', '.join(incomplete) or 'không có'}. Đây là dữ liệu đã ghi nhận, chưa phải kết quả chốt công.",
+        reply=attendance_reply(result, start, end, asks_lateness(normalize(ctx.request.message))),
         action=AIChatAction(action_type="SHOW_DATA", data={"type": "ATTENDANCE_SUMMARY",
                                                        "present_days": result["present_days"], "incomplete": incomplete}), sources=sources)
 
@@ -64,14 +112,32 @@ async def _start_leave(ctx: ToolContext) -> AIChatResponse:
     from app.services.ai_service import AIService
     if ctx.owner_user_account_id is None or ctx.db is None:
         raise HTTPException(403, "PERMISSION_DENIED")
-    return await AIService._start_draft(ctx.db, ctx.employee_id, ctx.owner_user_account_id, "DRAFT_LEAVE", ctx.request)
+    return await AIService._start_draft(ctx.db, ctx.employee_id, ctx.owner_user_account_id, "DRAFT_LEAVE", ctx.request, ctx.hints)
 
 
 async def _start_fix(ctx: ToolContext) -> AIChatResponse:
     from app.services.ai_service import AIService
     if ctx.owner_user_account_id is None or ctx.db is None:
         raise HTTPException(403, "PERMISSION_DENIED")
-    return await AIService._start_draft(ctx.db, ctx.employee_id, ctx.owner_user_account_id, "DRAFT_FIX", ctx.request)
+    return await AIService._start_draft(ctx.db, ctx.employee_id, ctx.owner_user_account_id, "DRAFT_FIX", ctx.request, ctx.hints)
+
+
+_REQUEST_STATUS = {"PENDING": "chờ quản lý duyệt", "APPROVED": "đã duyệt", "REJECTED": "bị từ chối", "CANCELLED": "đã hủy"}
+_SESSIONS = {"MORNING": "sáng", "AFTERNOON": "chiều", "FULL_DAY": "cả ngày"}
+
+
+def leave_status_reply(requests: list[dict]) -> AIChatResponse:
+    if not requests:
+        reply = "Bạn chưa có đơn nghỉ phép nào."
+    else:
+        reply = "Các đơn nghỉ gần nhất của bạn:\n" + "\n".join(
+            f"- {date.fromisoformat(item['leave_date']):%d/%m/%Y} ({_SESSIONS.get(item['session'], item['session'])}), "
+            f"{item['leave_name']}: **{_REQUEST_STATUS.get(item['status'], item['status'])}**" for item in requests)
+    return AIChatResponse(reply=reply, action=AIChatAction(action_type="NAVIGATE", data={"path": "/leaves"}))
+
+
+async def _leave_status(ctx: ToolContext) -> AIChatResponse:
+    return leave_status_reply(await AIEmployeeTool.recent_leave_requests(ctx.db, ctx.employee_id))
 
 
 async def _open_knowledge(ctx: ToolContext) -> AIChatResponse:
@@ -84,6 +150,7 @@ TOOLS = {
     "ATTENDANCE_SUMMARY": RegisteredTool("attendance.read_self", AIChatRequest, "attendance.read_self", True, _attendance_summary),
     "DRAFT_LEAVE": RegisteredTool("leave.draft_self", AIChatRequest, "leave.draft_self", True, _start_leave),
     "DRAFT_FIX": RegisteredTool("attendance.draft_fix_self", AIChatRequest, "attendance.draft_fix_self", True, _start_fix),
+    "LEAVE_STATUS": RegisteredTool("leave.read_self", AIChatRequest, "leave.read_self", True, _leave_status),
     "OPEN_KNOWLEDGE": RegisteredTool("knowledge.manage", AIChatRequest, "knowledge.manage", False, _open_knowledge),
 }
 

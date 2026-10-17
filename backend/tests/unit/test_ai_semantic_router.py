@@ -61,10 +61,16 @@ async def test_hr_named_balance_resolves_real_employee_id(monkeypatch):
     db = AsyncMock()
     target = SimpleNamespace(employee_id=23, employee_code="EMP023", full_name="Nguyễn Văn An")
     db.execute.side_effect = [SimpleNamespace(all=lambda: [target]),
-                             SimpleNamespace(scalar_one_or_none=lambda: SimpleNamespace(remaining_days=Decimal("8.00")))]
+                             SimpleNamespace(scalar_one_or_none=lambda: SimpleNamespace(remaining_days=Decimal("8.00"))),
+                             None]
     response = await AIService.process_chat(db, 7, AIChatRequest(message="Nguyễn Văn An còn bao nhiêu ngày phép?"), {"HR"}, 9, actor("HR"))
     assert "EMP023" in response.reply and "8.00" in response.reply
-    assert db.execute.await_count == 2
+    # Two reads (employee, balance); the third statement only stores follow-up context.
+    assert db.execute.await_count == 3
+    state_write = db.execute.await_args_list[2].args[0]
+    assert "INSERT INTO hr_ai_conversation_states" in str(state_write)
+    params = state_write.compile().params
+    assert params["last_employee_code"] == "EMP023" and params["last_intent"] == "LEAVE_BALANCE"
 
 
 @pytest.mark.asyncio
@@ -132,16 +138,17 @@ async def test_policy_plan_runs_before_action_keywords_and_uses_semantic_queries
 
 @pytest.mark.asyncio
 async def test_plan_gets_complete_question_with_subject_but_no_contact_details(monkeypatch):
+    from app.ai import understanding
     from app.ai.parsing import intent
-    generate = AsyncMock(return_value=ChatPlan(intent="LEAVE_BALANCE", target="EMPLOYEE", employee_reference="Nguyễn Văn An"))
-    monkeypatch.setattr(intent, "generate_json", generate)
+    generate = AsyncMock(return_value=[("show_leave_balance", {"subject": "EMPLOYEE", "employee_reference": "Nguyễn Văn An"})])
+    monkeypatch.setattr(understanding, "generate_function_calls", generate)
     message = "Xem số phép của Nguyễn Văn An ngày 01-07-2026, email an@example.test, điện thoại 0912345678"
-    await intent.interpret_chat_request(message, date(2026, 10, 15))
+    plan = await intent.interpret_chat_request(message, date(2026, 10, 15))
     payload = json.loads(generate.call_args.args[1])
     assert "Nguyễn Văn An" in payload["message"] and "2026" in payload["message"]
     assert "01-07-2026" in payload["message"]
     assert "an@example.test" not in payload["message"] and "0912345678" not in payload["message"]
-    assert generate.call_args.args[3] is ChatPlan
+    assert plan.intent == "LEAVE_BALANCE" and plan.target == "EMPLOYEE" and plan.employee_reference == "Nguyễn Văn An"
 
 
 @pytest.mark.asyncio
@@ -151,9 +158,10 @@ async def test_plan_gets_complete_question_with_subject_but_no_contact_details(m
     "Tôi cần biết ly do chính sách này thay đổi",
 ])
 async def test_policy_question_is_not_truncated_as_a_draft_reason(monkeypatch, message):
+    from app.ai import understanding
     from app.ai.parsing import intent
-    generate = AsyncMock(return_value=ChatPlan(intent="POLICY_QUERY", target="NONE"))
-    monkeypatch.setattr(intent, "generate_json", generate)
+    generate = AsyncMock(return_value=[("answer_policy_question", {"question": message})])
+    monkeypatch.setattr(understanding, "generate_function_calls", generate)
     await intent.interpret_chat_request(message, date(2026, 10, 15))
     assert json.loads(generate.call_args.args[1])["message"] == message
 
