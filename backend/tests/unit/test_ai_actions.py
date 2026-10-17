@@ -211,7 +211,50 @@ async def test_provider_failure_mid_form_keeps_the_form_and_guesses_nothing(monk
     response = await AIService.process_chat(AsyncMock(), 7, AIChatRequest(message="để mình nghĩ thêm đã nhé bạn ơi", draft_id=D, draft_revision=2),
                                             {"EMPLOYEE"}, 9, SimpleNamespace(user_account_id=9))
     continued.assert_not_called()
-    assert response.status == "NEEDS_INPUT" and response.message_code == "AI_INTENT_QUOTA_EXCEEDED" and response.draft_id == D
+    # UNAVAILABLE (CLAUDE.md), with the form kept so the user can answer it after retrying.
+    assert response.status == "UNAVAILABLE" and response.message_code == "AI_INTENT_QUOTA_EXCEEDED" and response.draft_id == D
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("message,lookup", [
+    ("à mà nhóm tôi còn bao nhiêu ngày phép nhỉ", call("show_leave_balance", subject="MY_TEAM")),
+    ("à mà lương tháng trước của tôi bao nhiêu nhỉ", call("show_my_salary")),
+])
+async def test_side_lookup_that_runs_a_report_asks_first_and_writes_nothing(monkeypatch, semantic, message, lookup):
+    monkeypatch.setattr(router, "load_context", AsyncMock(return_value=None))
+    dispatch = AsyncMock(side_effect=AssertionError("no report draft or run next to the open form"))
+    monkeypatch.setattr(AIService, "_dispatch_free_intent", dispatch)
+    response, continued, _ = await turn(monkeypatch, message, draft(), [lookup])
+    continued.assert_not_called()
+    assert response.message_code == "DRAFT_SWITCH_CONFIRMATION_REQUIRED"
+    assert (response.draft_id, response.draft_revision, response.missing_fields) == (D, 2, ["session", "leave_type_id", "reason"])
+
+
+@pytest.mark.asyncio
+async def test_side_lookup_that_still_opens_a_draft_is_cancelled_not_orphaned(monkeypatch, semantic):
+    monkeypatch.setattr(router, "load_context", AsyncMock(return_value=None))
+    other = "00000000-0000-0000-0000-000000000002"
+    monkeypatch.setattr(AIService, "_dispatch_free_intent", AsyncMock(return_value=AIChatResponse(
+        reply="?", draft_id=other, draft_revision=1, missing_fields=["scope"])))
+    cancel = AsyncMock()
+    monkeypatch.setattr(AIDraftService, "cancel_draft", cancel)
+    response, _, _ = await turn(monkeypatch, "à mà tôi còn mấy ngày phép nhỉ", draft(),
+                                [call("show_leave_balance", subject="SELF")])
+    assert cancel.await_args.args[1:] == (other, 9)
+    assert response.message_code == "DRAFT_SWITCH_CONFIRMATION_REQUIRED" and response.draft_id == D
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("message,scope", [
+    ("à cho cái báo cáo nghỉ phép đó luôn nhé bạn", None),
+    ("à cho báo cáo nghỉ phép của tôi luôn nhé bạn", "SELF"),
+    ("à làm báo cáo nghỉ phép cho cả nhóm luôn nhé", "DIRECT_REPORTS"),
+])
+async def test_model_self_scope_in_an_open_report_needs_first_person_wording(monkeypatch, semantic, message, scope):
+    subject = "MY_TEAM" if scope == "DIRECT_REPORTS" else "SELF"
+    _, continued, _ = await turn(monkeypatch, message, draft("DRAFT_REPORT", missing=("scope",)),
+                                 [call("create_report", report="LEAVE", subject=subject)])
+    assert (continued.await_args.args[6] or {}).get("scope") == scope
 
 
 # --- chart requests ----------------------------------------------------------------

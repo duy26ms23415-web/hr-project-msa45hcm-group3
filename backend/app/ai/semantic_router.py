@@ -285,10 +285,25 @@ _SCOPES = {"SELF": "SELF", "MY_TEAM": "DIRECT_REPORTS", "COMPANY": "COMPANY"}
 _FAST_PATH_WORDS = 6
 
 
-def _keep_draft(response: AIChatResponse, draft) -> AIChatResponse:
-    """A side answer never consumes or drops the open form."""
+def keep_draft(response: AIChatResponse, draft) -> AIChatResponse:
+    """A side answer never consumes or drops the open form.
+
+    UNAVAILABLE and DENIED are kept so a provider failure or a refusal is never reported as a normal prompt."""
+    status = response.status if response.status in {"UNAVAILABLE", "DENIED"} else "NEEDS_INPUT"
     return response.model_copy(update={"draft_id": draft.draft_id, "draft_revision": draft.revision,
-                                       "missing_fields": draft.missing_fields, "status": "NEEDS_INPUT"})
+                                       "missing_fields": draft.missing_fields, "status": status})
+
+
+def _switch_required(draft) -> AIChatResponse:
+    return keep_draft(AIChatResponse(
+        reply="Bạn đang có một bản nháp chưa hoàn tất. Hãy tiếp tục trả lời trường còn thiếu, hoặc gửi ‘hủy’ trước khi bắt đầu tác vụ mới.",
+        message_code="DRAFT_SWITCH_CONFIRMATION_REQUIRED"), draft)
+
+
+def _runs_a_report(plan: ChatPlan) -> bool:
+    parts = plan.sub_requests or [plan]
+    return any(part.intent.startswith("REPORT_") or part.intent == "ANALYZE_REPORT"
+               or part.target in {"DIRECT_REPORTS", "COMPANY"} for part in parts)
 
 
 def _fills_asked_field(draft, message: str, today) -> bool:
@@ -310,7 +325,7 @@ def _fills_asked_field(draft, message: str, today) -> bool:
 
 async def process_semantic_draft_turn(db, employee_id, req, roles, owner_id, actor, today):
     from app.ai.actions import FORM_ACTIONS
-    from app.ai.parsing.intent import _REPORT_KINDS, _form_slots, to_plan
+    from app.ai.parsing.intent import _REPORT_KINDS, _first_person, _form_slots, to_plan
     from app.ai.understanding import Understanding, understand
     from app.services.ai_draft_service import AIDraftService
     from fastapi import HTTPException
@@ -331,26 +346,35 @@ async def process_semantic_draft_turn(db, employee_id, req, roles, owner_id, act
         understanding = await understand(req.message, today, open_form=form_action,
                                          waiting_for=draft.missing_fields[0] if draft.missing_fields else None)
     except ProviderFailure as exc:
-        return _keep_draft(unavailable(exc.category), draft)
+        return keep_draft(unavailable(exc.category), draft)
     names = understanding.names
     if "cancel_current_form" in names:
         return await fill("hủy")
     same = [call for call in understanding.calls if call.spec.name == form_action]
     others = [call for call in understanding.calls if call.spec.name not in {form_action, "cancel_current_form"}]
     if any(call.spec.kind in {"FORM", "REPORT"} for call in others):
-        return _keep_draft(AIChatResponse(
-            reply="Bạn đang có một bản nháp chưa hoàn tất. Hãy tiếp tục trả lời trường còn thiếu, hoặc gửi ‘hủy’ trước khi bắt đầu tác vụ mới.",
-            message_code="DRAFT_SWITCH_CONFIRMATION_REQUIRED"), draft)
+        return _switch_required(draft)
     side = [call for call in others if call.spec.kind != "META"]
     if side:
         # A question asked mid-form is answered on its own; the form stays open.
         plan = to_plan(Understanding(side), req.message)
+        if _runs_a_report(plan):
+            # Team/company figures and payslips are report runs: one task at a time, so ask first
+            # instead of creating a report draft or run next to the open form.
+            return _switch_required(draft)
         side_req = req.model_copy(update={"draft_id": None, "draft_revision": None, "inputs": None})
         response = await run_plan(db, employee_id, side_req, roles, owner_id, actor, today, plan, None)
-        return _keep_draft(response, draft)
+        if response.draft_id and response.draft_id != draft.draft_id:
+            # Safety net: a lookup that still opened a draft of its own is dropped, not orphaned.
+            try:
+                await AIDraftService.cancel_draft(db, response.draft_id, owner_id)
+            except HTTPException:
+                pass  # Already not COLLECTING: nothing is left open.
+            return _switch_required(draft)
+        return keep_draft(response, draft)
     if not same:
         if any(call.spec.name == "decline_request" for call in others):
-            return _keep_draft(AIChatResponse(reply="Tôi hỗ trợ nghiệp vụ HR và chính sách lao động trong phạm vi được cấp quyền.",
+            return keep_draft(AIChatResponse(reply="Tôi hỗ trợ nghiệp vụ HR và chính sách lao động trong phạm vi được cấp quyền.",
                                               answer_mode="OUT_OF_SCOPE"), draft)
         return await fill(req.message)  # Unclear: the form explains what it still needs.
     call = same[0]
@@ -358,7 +382,8 @@ async def process_semantic_draft_turn(db, employee_id, req, roles, owner_id, act
         inputs = dict(req.inputs or {})
         if call.args.report:
             inputs.setdefault("kind", _REPORT_KINDS.get(call.args.report, call.args.report))
-        if call.args.subject in _SCOPES:
+        # The model's SELF needs first-person wording, as for a new report (intent._first_person).
+        if call.args.subject in _SCOPES and (call.args.subject != "SELF" or _first_person(req.message)):
             inputs.setdefault("scope", _SCOPES[call.args.subject])
         return await fill(req.message, inputs=inputs or None)
     hints = _form_slots(call, req.message)

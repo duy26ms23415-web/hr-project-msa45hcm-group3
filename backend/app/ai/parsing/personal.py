@@ -39,8 +39,37 @@ def asks_lateness(text: str) -> bool:
 
 def is_leave_status_query(text: str) -> bool:
     """"Đơn của tôi duyệt chưa?" — the actor's own requests, not a manager's queue."""
-    return ("don" in text and "cho toi duyet" not in text and _personal(text)
+    # Whole word: "don" is also inside "dong" (đóng, hợp đồng, lao động). A report request is not a lookup.
+    return (bool(re.search(r"\bdon\b", text)) and "cho toi duyet" not in text and _personal(text)
+            and not re.search(r"\b(?:bao cao|xuat|thong ke)\b", text)
             and bool(re.search(r"\b(?:duyet chua|da duoc duyet|trang thai|tinh trang|bi tu choi|da gui)\b", text)))
+
+
+_FIRST_PERSON = re.compile(r"\b(?:toi|minh|em|tui)\b")
+
+
+def is_rule_question(text: str) -> bool:
+    """A question about what the company grants or when, not about anyone's records.
+
+    "Công ty cho nghỉ phép bao nhiêu ngày?", "Nhân viên được nghỉ mấy ngày mỗi năm?",
+    "Lương tháng này khi nào trả?" are answered from the policy documents."""
+    if re.search(r"\b(?:bao cao|thong ke|xuat|bieu do|phieu luong)\b", text):
+        return False  # Report wording keeps the report flow.
+    when = r"\b(?:khi nao|bao gio|ngay nao|luc nao|hom nao|ngay may)\b"
+    if re.search(r"\b(?:luong|thuong)\b", text) and re.search(when, text) and re.search(
+            r"\b(?:tra|nhan|chi|phat|chuyen|ve)\b", text):
+        return True
+    # Records, not rules: the speaker's own, a group's, a dated period ("hôm qua được tính công chưa?"
+    # drops the pronoun), or what is left of a balance ("còn" — but "con ốm" is a child).
+    if (_FIRST_PERSON.search(text) or _PERIOD.search(text)
+            or re.search(r"\b(?:nhom|team|phong|bo phan)\b", text)
+            or re.search(r"\bcon (?:lai|bao nhieu|may|duoc|ngay|phep|nghi)\b", text)):
+        return False
+    grant = r"(?:nghi|phep|huong|duoc|lam|tang|tinh)"
+    return bool(re.search(rf"\bcong ty (?:cho|quy dinh|ap dung)\b.{{0,15}}\b{grant}\b"
+                          r"|\bduoc (?:nghi|huong|cong|tinh|phep|tang)\b"
+                          r"|\b(?:moi|mot|hang) (?:nam|thang)\b.{0,30}\b(?:bao nhieu|may) ngay\b"
+                          r"|\b(?:bao nhieu|may) ngay\b.{0,30}\b(?:moi|mot|hang) (?:nam|thang)\b", text))
 
 
 def is_own_salary_query(text: str) -> bool:

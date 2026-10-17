@@ -125,3 +125,45 @@ def test_leave_range_lists_working_days_only():
     assert leave_range("muốn nghỉ từ thứ 2 đến thứ 5 tuần sau", TODAY) == [date(2026, 10, 19 + i) for i in range(4)]
     assert len(leave_range("nghỉ từ 16/10 đến 20/10", TODAY)) == 3  # Fri, Mon, Tue
     assert leave_range("xin nghỉ ngày mai", TODAY) is None
+
+
+@pytest.mark.parametrize("message", [
+    "Tình trạng đóng bảo hiểm của tôi thế nào?", "Hợp đồng lao động của tôi đang ở trạng thái gì?",
+    "Xuất báo cáo tình trạng đơn nghỉ của tôi tháng này",
+])
+def test_don_is_a_whole_word_and_reports_are_not_status_lookups(message):
+    assert not is_leave_status_query(canonical(message))
+
+
+def test_leave_status_still_matches_own_requests():
+    assert is_leave_status_query(canonical("Đơn nghỉ của tôi duyệt chưa?"))
+
+
+@pytest.mark.parametrize("message", [
+    "Công ty cho nghỉ phép bao nhiêu ngày?", "Lương tháng này khi nào trả?", "Bao giờ thì nhận lương?",
+    "Nhân viên được nghỉ mấy ngày mỗi năm?", "Công ty áp dụng phép năm thế nào?", "Ngày mấy chuyển lương vậy?",
+    "Phép năm mỗi năm bao nhiêu ngày?", "Thưởng Tết khi nào chi?", "Công ty cho nghỉ mấy ngày khi con ốm?",
+])
+def test_company_rule_questions_go_to_policy(message):
+    from app.ai.parsing.personal import is_rule_question
+    assert is_rule_question(canonical(message))
+
+
+@pytest.mark.parametrize("message", [
+    "Tôi còn bao nhiêu ngày phép?", "Tháng này tôi đi muộn mấy lần?", "Lương tháng này của tôi bao nhiêu?",
+    "Nhóm tôi tháng này ai đi muộn?", "Đơn của tôi khi nào được trả lời?",
+    "Báo cáo chấm công toàn công ty cho tháng này", "Xuất báo cáo chấm công hàng tháng",
+    "Chấm công toàn công ty cho tháng này thế nào?", "Tháng này nhóm có ai nghỉ quá một tháng không?",
+    "Xuất phiếu lương tháng này khi nào có?", "Nguyễn Văn An còn được nghỉ mấy ngày?",
+    "Thống kê số ngày nghỉ hàng tháng của nhóm", "Phòng kế toán mỗi tháng nghỉ bao nhiêu ngày?",
+    "Hôm qua được tính công chưa?",
+])
+def test_records_questions_are_not_rule_questions(message):
+    from app.ai.parsing.personal import is_rule_question
+    assert not is_rule_question(canonical(message))
+
+
+def test_bare_weekday_attendance_lookup_points_back():
+    friday = date(2026, 10, 16)
+    assert attendance_period("Thứ 5 tôi chấm công lúc mấy giờ?", friday) == (date(2026, 10, 15), date(2026, 10, 15))
+    assert attendance_period("thứ bảy tôi có chấm công không", friday) == (date(2026, 10, 10), date(2026, 10, 10))

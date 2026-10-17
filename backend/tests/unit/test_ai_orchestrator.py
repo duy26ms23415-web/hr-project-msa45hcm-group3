@@ -150,3 +150,50 @@ async def test_explicit_draft_input_keeps_owner_revision_and_field_checks(monkey
     assert rejected.value.status_code == {"foreign_owner": 404, "stale_revision": 409, "invalid_field": 422}[failure]
     get_draft.assert_awaited_once_with(None, draft.draft_id, 9)
     update.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("message,role", [
+    ("Công ty cho nghỉ phép bao nhiêu ngày?", "MANAGER"),
+    ("Lương tháng này khi nào trả?", "EMPLOYEE"),
+])
+async def test_rule_path_sends_company_rule_questions_to_the_policy_documents(monkeypatch, message, role):
+    from app.ai.orchestrator import ChatOrchestrator
+    from app.core.config import settings
+    from app.services.ai_service import AIService
+    monkeypatch.setattr(settings, "GEMINI_ENABLED", False)
+    knowledge = AsyncMock(return_value=AIChatResponse(reply="Theo nội quy."))
+    monkeypatch.setattr(AIService, "_answer_knowledge", knowledge)
+    response = await ChatOrchestrator.process_chat(None, 7, AIChatRequest(message=message), {role}, 9)
+    assert response.reply == "Theo nội quy." and knowledge.await_args.kwargs["policy_question"] is True
+
+
+@pytest.mark.asyncio
+async def test_rule_wording_in_an_open_form_is_the_answer_not_a_policy_question(monkeypatch):
+    from app.ai.orchestrator import ChatOrchestrator
+    from app.core.config import settings
+    from app.services.ai_service import AIService
+    monkeypatch.setattr(settings, "GEMINI_ENABLED", False)
+    monkeypatch.setattr(AIService, "_answer_knowledge", AsyncMock(side_effect=AssertionError("not a policy question")))
+    continued = AsyncMock(return_value=AIChatResponse(reply="next"))
+    monkeypatch.setattr(AIService, "_continue_draft", continued)
+    response = await ChatOrchestrator.process_chat(None, 7, AIChatRequest(
+        message="nghỉ để được nghỉ ngơi sau dự án", draft_id="a" * 36, draft_revision=3), {"EMPLOYEE"}, 9)
+    assert response.reply == "next" and continued.await_args.args[3] == "nghỉ để được nghỉ ngơi sau dự án"
+
+
+@pytest.mark.asyncio
+async def test_rule_path_policy_interruption_keeps_unavailable_status(monkeypatch):
+    from types import SimpleNamespace
+    from app.ai.orchestrator import ChatOrchestrator
+    from app.core.config import settings
+    from app.services.ai_draft_service import AIDraftService
+    from app.services.ai_service import AIService
+    monkeypatch.setattr(settings, "GEMINI_SEMANTIC_ENABLED", False)
+    draft = SimpleNamespace(draft_id="a" * 36, revision=3, status="COLLECTING", command="DRAFT_LEAVE", missing_fields=["reason"])
+    monkeypatch.setattr(AIDraftService, "get_draft", AsyncMock(return_value=draft))
+    monkeypatch.setattr(AIService, "_answer_knowledge", AsyncMock(return_value=AIChatResponse(
+        reply="Chưa xử lý được.", status="UNAVAILABLE", message_code="AI_INTENT_PROVIDER_TIMEOUT")))
+    response = await ChatOrchestrator.process_chat(None, 7, AIChatRequest(
+        message="Quy định nghỉ phép thế nào?", draft_id=draft.draft_id, draft_revision=3), {"EMPLOYEE"}, 9)
+    assert (response.status, response.draft_id, response.missing_fields) == ("UNAVAILABLE", draft.draft_id, ["reason"])

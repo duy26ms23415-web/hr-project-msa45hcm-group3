@@ -21,6 +21,22 @@ RULE = Passage(document_id=1, title="Nội quy", content="Nghỉ phép năm ph�
 LEAVE = {"leave_date": "2026-10-17", "session": "FULL_DAY", "leave_type_id": 1, "reason": "Việc riêng của Nguyễn Văn An"}
 
 
+def session(events=None):
+    """AsyncSession stand-in whose begin_nested() is an async context manager that records its outcome."""
+    events = [] if events is None else events
+
+    class Savepoint:
+        async def __aenter__(self):
+            events.append("savepoint")
+
+        async def __aexit__(self, exc_type, exc, tb):
+            events.append("rollback" if exc_type else "release")
+            return False
+    db = AsyncMock()
+    db.begin_nested = Mock(side_effect=lambda: Savepoint())
+    return db
+
+
 @pytest.fixture
 def guard(monkeypatch):
     monkeypatch.setattr(ai_policy_guard, "tagging_ready", lambda: True)
@@ -45,7 +61,7 @@ async def test_conflict_becomes_cited_warning_and_provider_never_sees_reason(gua
     generate.return_value = _Verdict(verdict="CONFLICT", findings=[_Finding(
         source=1, rule="Phải báo trước ít nhất 3 ngày làm việc",
         evidence="phải báo trước ít nhất 3 ngày làm việc", reason="Đơn chỉ báo trước 1 ngày")])
-    warnings = await check_action(AsyncMock(), {"EMPLOYEE"}, TODAY, "DRAFT_LEAVE", LEAVE, "ANNUAL")
+    warnings = await check_action(session(), {"EMPLOYEE"}, TODAY, "DRAFT_LEAVE", LEAVE, "ANNUAL")
     assert [w.severity for w in warnings] == ["CONFLICT"]
     assert warnings[0].source.viewer_path == "/knowledge/view/1?version=2&section=3"
     assert warnings[0].source.excerpt == "phải báo trước ít nhất 3 ngày làm việc"
@@ -64,14 +80,14 @@ async def test_conflict_becomes_cited_warning_and_provider_never_sees_reason(gua
 async def test_forged_evidence_or_invented_numbers_are_dropped(guard, finding):
     _, generate = guard
     generate.return_value = _Verdict(verdict="CONFLICT", findings=[finding])
-    assert await check_action(AsyncMock(), {"EMPLOYEE"}, TODAY, "DRAFT_LEAVE", LEAVE, "ANNUAL") == []
+    assert await check_action(session(), {"EMPLOYEE"}, TODAY, "DRAFT_LEAVE", LEAVE, "ANNUAL") == []
 
 
 @pytest.mark.asyncio
 async def test_provider_failure_marks_draft_unchecked_but_does_not_block(guard):
     _, generate = guard
     generate.side_effect = ProviderFailure("PROVIDER_TIMEOUT")
-    warnings = await check_action(AsyncMock(), {"EMPLOYEE"}, TODAY, "DRAFT_FIX",
+    warnings = await check_action(session(), {"EMPLOYEE"}, TODAY, "DRAFT_FIX",
                                   {"work_date": "2026-10-15", "event_type": "CHECK_OUT", "requested_time": "17:30", "reason": "x"})
     assert [w.severity for w in warnings] == ["UNCHECKED"]
 
@@ -81,7 +97,7 @@ async def test_guard_is_off_without_rule_tagging(monkeypatch):
     monkeypatch.setattr(ai_policy_guard, "tagging_ready", lambda: False)
     search = AsyncMock()
     monkeypatch.setattr(ai_policy_guard.AIKnowledgeTool, "search", search)
-    assert await check_action(AsyncMock(), {"EMPLOYEE"}, TODAY, "DRAFT_LEAVE", LEAVE, "ANNUAL") == []
+    assert await check_action(session(), {"EMPLOYEE"}, TODAY, "DRAFT_LEAVE", LEAVE, "ANNUAL") == []
     search.assert_not_awaited()
 
 
@@ -104,6 +120,21 @@ async def test_ready_leave_draft_carries_warnings_and_is_still_returned(monkeypa
     assert response.policy_warnings == [warning]
     assert "quản lý trực tiếp là người quyết định" in response.reply
     assert check.await_args.args[1] == {"EMPLOYEE"}
+
+
+@pytest.mark.asyncio
+async def test_guard_sql_runs_in_a_savepoint_and_the_provider_call_outside_it(guard, monkeypatch):
+    from app.services.ai_service import AIService
+    search, generate = guard
+    events = []
+    generate.side_effect = lambda *a, **k: events.append("provider") or _Verdict(verdict="OK", findings=[])
+    assert await check_action(session(events), {"EMPLOYEE"}, TODAY, "DRAFT_LEAVE", LEAVE, "ANNUAL") == []
+    assert events == ["savepoint", "release", "provider"]
+    events.clear()
+    search.side_effect = RuntimeError("SQL failed")
+    warnings = await AIService._policy_warnings(session(events), None, "DRAFT_LEAVE", LEAVE, "ANNUAL", today=TODAY)
+    assert events == ["savepoint", "rollback"]  # The draft's transaction stays usable for mark_ready.
+    assert [warning.severity for warning in warnings] == ["UNCHECKED"]
 
 
 @pytest.mark.asyncio

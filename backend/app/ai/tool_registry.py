@@ -52,11 +52,13 @@ _DAY_STATUS = {"PRESENT": "đủ công", "HALF_DAY": "nửa công", "INCOMPLETE"
 
 def attendance_period(message: str, today: date) -> tuple[date, date]:
     """Single day ("hôm qua", "15/10") > week > month wording > month to date."""
-    from app.services.ai_service import requested_date
+    from app.ai.parsing.dates import resolve_rule_date
     text = normalize(message)
-    single = requested_date(message, today) if not re.search(r"\b(?:thang|tuan) (?:nay|truoc)\b", text) else None
-    if single:
-        start = end = date.fromisoformat(single)
+    # Attendance already happened, so a bare weekday ("thứ 5") is the latest one, not the next.
+    single = (resolve_rule_date(message, today, "past")
+              if not re.search(r"\b(?:thang|tuan) (?:nay|truoc)\b", text) else None)
+    if single and single.status == "RESOLVED":
+        start = end = date.fromisoformat(single.value)
     elif week := week_period(text, today):
         start, end = week
     else:

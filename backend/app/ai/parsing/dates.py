@@ -27,6 +27,8 @@ class DateResolution:
 
 WEEKDAYS = {"thu hai": 0, "thu ba": 1, "thu tu": 2, "thu nam": 3,
             "thu sau": 4, "thu bay": 5, "chu nhat": 6}
+# Whole words: "thu ba" is inside "thu bay", "thu tu" inside "thu tuc" (thủ tục).
+_WEEKDAY_WORD = re.compile(r"\b(?:" + "|".join(WEEKDAYS) + r")\b")
 
 
 def _result(value: date) -> DateResolution:
@@ -97,7 +99,7 @@ def resolve_rule_date(message: str, today: date, bare_weekday: Literal["future",
     # "Nghỉ tuần sau" names a week, not a day: ask instead of letting the interpreter pick one.
     whole_week = bool(re.search(r"\btuan\s+(?:nay|sau|toi|truoc)\b", text)) and not re.search(r"\d", text)
     if (re.search(r"\b(?:mot ngay nao do|tuan dau tien thang|tuan dau tien trong thang)\b", text) or whole_week) \
-            and not any(w in text for w in WEEKDAYS):
+            and not _WEEKDAY_WORD.search(text):
         return DateResolution("AMBIGUOUS", None, "RULE", "DAY_REQUIRED")
     if _multiple_dates(text):
         return DateResolution("AMBIGUOUS", None, "RULE", "MULTIPLE_DATES")
@@ -140,7 +142,7 @@ def resolve_rule_date(message: str, today: date, bare_weekday: Literal["future",
     if re.search(r"\bmai\b", text):
         return _result(today + timedelta(days=1))
     for phrase, weekday in WEEKDAYS.items():
-        if phrase in text:
+        if re.search(rf"\b{phrase}\b", text):
             week = re.search(r"\btuan\s+(nay|sau|toi|truoc)\b", text)
             if week:
                 shift = 7 if week[1] in {"sau", "toi"} else -7 if week[1] == "truoc" else 0

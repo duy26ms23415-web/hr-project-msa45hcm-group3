@@ -22,7 +22,7 @@ from app.services.ai_service import AIService, draft_reason_match, is_leave_bala
 from app.services.ai_suggestions import SUGGESTIONS, resolve_suggestion
 from app.services.knowledge_retrieval import normalize
 from app.ai.parsing.lexicon import canonical
-from app.ai.parsing.personal import asks_lateness, is_attendance_query, is_team_records_query, is_leave_status_query, is_own_salary_query, is_remote_request
+from app.ai.parsing.personal import asks_lateness, is_attendance_query, is_team_records_query, is_leave_status_query, is_own_salary_query, is_remote_request, is_rule_question
 from app.services.ai_employee_tool import AIEmployeeTool
 from app.services.report_run_service import ReportRunService
 from app.services.ai_employee_query import answer_employee_query, mentions_employee
@@ -66,6 +66,7 @@ class ChatOrchestrator:
 
     @staticmethod
     async def _process_chat(db: AsyncSession, employee_id: int, req: AIChatRequest, roles: set[str] | None = None, owner_user_account_id: int | None = None, authenticated_user=None) -> AIChatResponse:
+        from app.ai.semantic_router import keep_draft  # Lazy, like the semantic hand-off below.
         roles = roles or set()
         require_known_role(roles)
         actor_caps = capabilities(roles)
@@ -89,6 +90,9 @@ class ChatOrchestrator:
         explicit_draft_reply = bool(req.draft_id and (req.inputs or draft_reason_match(req.message) is not None))
         policy_question = policy_question or any(text == canonical(SUGGESTIONS[key].prompt) for key in policy_ids)
         policy_question = policy_question or any(term in text for term in ("chinh sach", "quy dinh", "noi quy", "quy trinh", "thu tuc", "huong dan", "dieu kien")) or bool(re.search(r"\b(?:cach|lam the nao|lam sao)\b.{0,40}\b(?:nghi|phep|cham cong|giai trinh)\b", text))
+        # Not while a form is open: free-text answers ("được nghỉ ngơi") would read as rule questions.
+        policy_question = policy_question or (not req.draft_id and is_rule_question(text)
+                                              and not mentions_employee(req.message))
         knowledge_management = any(term in text for term in ("quan ly tai lieu", "quan tri tai lieu"))
         explicit_report = any(term in text for term in ("tao bao cao", "mo bao cao", "xuat bao cao", "lap bao cao",
                                                         "xuat phieu luong", "tao phieu luong", "xem phieu luong"))
@@ -161,12 +165,7 @@ class ChatOrchestrator:
                 if interruption:
                     response = await AIService._answer_knowledge(
                         db, roles, today, req, policy_question=True)
-                    return response.model_copy(update={
-                        "draft_id": active.draft_id,
-                        "draft_revision": active.revision,
-                        "missing_fields": active.missing_fields,
-                        "status": "NEEDS_INPUT",
-                    })
+                    return keep_draft(response, active)
                 # Explicitly ask for a switch instead of consuming the prompt
                 # as an answer to the old draft or accidentally starting a new run.
                 if (active.command == "DRAFT_REPORT" and
@@ -182,7 +181,7 @@ class ChatOrchestrator:
                         message_code="DRAFT_SWITCH_CONFIRMATION_REQUIRED",
                     )
 
-        readonly = (None if explicit_draft_reply or policy_question
+        readonly = (None if explicit_draft_reply or policy_question or report_request
                     else await ChatOrchestrator._readonly_reply(db, text, employee_id, actor_caps))
         if req.draft_id and readonly is not None:
             # Status and queue lookups never consume the open draft; the user answers it afterwards.
@@ -191,8 +190,7 @@ class ChatOrchestrator:
             draft = await AIDraftService.get_draft(db, req.draft_id, owner_user_account_id)
             if draft.revision != req.draft_revision:
                 raise HTTPException(409, "AI_DRAFT_REVISION_CONFLICT")
-            return readonly.model_copy(update={"draft_id": draft.draft_id, "draft_revision": draft.revision,
-                                               "missing_fields": draft.missing_fields, "status": "NEEDS_INPUT"})
+            return keep_draft(readonly, draft)
 
         personal_lookup = is_leave_balance_query(text) or is_attendance_query(text)
         if req.draft_id and personal_lookup and not explicit_draft_reply:
@@ -205,8 +203,7 @@ class ChatOrchestrator:
             result = await execute_registered(intent, ToolContext(db, employee_id, owner_user_account_id,
                 roles, req.model_copy(update={"draft_id": None, "draft_revision": None, "inputs": None}), today))
             assert result is not None  # Fixed registry IDs; never supplied as Python names by the model.
-            return result.model_copy(update={"draft_id": draft.draft_id, "draft_revision": draft.revision,
-                                             "missing_fields": draft.missing_fields, "status": "NEEDS_INPUT"})
+            return keep_draft(result, draft)
 
         if req.draft_id:
             if owner_user_account_id is None:
