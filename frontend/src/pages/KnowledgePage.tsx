@@ -31,6 +31,9 @@ interface Version {
   created_at: string;
   effective_from: string | null;
   effective_to: string | null;
+  extraction_method?: string | null;
+  index_status?: string | null;
+  embedding_model?: string | null;
 }
 
 interface Section {
@@ -40,6 +43,8 @@ interface Section {
   page_start: number;
   page_end: number;
   is_answerable: boolean;
+  level?: number | null;
+  heading_path?: string | null;
 }
 
 interface UploadItem {
@@ -52,6 +57,16 @@ interface UploadItem {
 
 const roleLabels: Record<string, string> = { EMPLOYEE: 'Tất cả nhân viên', MANAGER: 'Quản lý, HR và quản trị viên', HR: 'HR và quản trị viên', ADMIN: 'Chỉ quản trị viên' };
 const statusLabels: Record<string, string> = { DRAFT: 'Bản nháp', PUBLISHED: 'Đã công bố', ARCHIVED: 'Đã lưu trữ' };
+const extractionLabels: Record<string, string> = {
+  OUTLINE: 'Theo bookmark của PDF', PRINTED_TOC: 'Theo mục lục in trong PDF', LAYOUT: 'Theo định dạng tiêu đề',
+  PAGE: 'Theo từng trang', MANUAL: 'Do HR chỉnh mục', GEMINI_STRUCTURE: 'AI nhận diện cấu trúc', GEMINI_OCR: 'AI đọc bản scan',
+};
+const indexLabels: Record<string, { text: string; color: string }> = {
+  PENDING: { text: 'Lập chỉ mục khi công bố', color: 'default' },
+  READY: { text: 'Tìm theo ngữ nghĩa và từ khóa', color: 'green' },
+  LEXICAL_ONLY: { text: 'Chỉ tìm theo từ khóa', color: 'gold' },
+  FAILED: { text: 'Lỗi lập chỉ mục', color: 'red' },
+};
 const searchText = (value: string) => value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/gi, 'd').toLowerCase().trim();
 
 function SectionFields({ form }: { form: FormInstance }) {
@@ -62,6 +77,8 @@ function SectionFields({ form }: { form: FormInstance }) {
       {fields.map(({ key, name, ...rest }) => <Card key={key} size="small" title={`Mục ${name + 1}`}
         extra={<Button type="text" danger icon={<DeleteOutlined />} aria-label={`Xóa mục ${name + 1}`} onClick={() => remove(name)} />}>
         <Form.Item {...rest} name={[name, 'section_code']} hidden><Input /></Form.Item>
+        <Form.Item {...rest} name={[name, 'level']} hidden><InputNumber /></Form.Item>
+        <Form.Item {...rest} name={[name, 'heading_path']} hidden><Input /></Form.Item>
         <Form.Item {...rest} name={[name, 'heading']} label="Tiêu đề mục trong PDF"
           rules={[{ required: true, whitespace: true, message: 'Nhập tiêu đề xuất hiện trong PDF.' }, { max: 300 }]}>
           <Input placeholder="Ví dụ: Điều 1. Thời giờ làm việc" maxLength={300} />
@@ -73,7 +90,7 @@ function SectionFields({ form }: { form: FormInstance }) {
             dependencies={['sections', name, 'page_start']}
             rules={[{ required: true, message: 'Nhập trang kết thúc.' }, { validator: async (_, value) => {
               const start = form.getFieldValue(['sections', name, 'page_start']);
-              if (value < start || value - start >= 10) throw new Error('Chọn từ 1 đến 10 trang cho mỗi mục.');
+              if (value < start) throw new Error('Trang kết thúc phải từ trang bắt đầu trở đi.');
             } }]}><InputNumber min={1} max={100} precision={0} style={{ width: '100%' }} /></Form.Item></Col>
           <Col xs={24} sm={8}><Form.Item {...rest} name={[name, 'is_answerable']} label="AI được dùng mục này" valuePropName="checked"><Switch /></Form.Item></Col>
         </Row>
@@ -218,6 +235,16 @@ export function KnowledgePage() {
     } catch (error: any) { message.error(error.response?.data?.detail || 'Không công bố được phiên bản.'); }
     finally { setSaving(false); }
   };
+  const reindexVersion = async (version: Version) => {
+    if (!versionDocument) return;
+    setSaving(true);
+    try {
+      const updated = (await api.post<Version>(`/ai/knowledge/${versionDocument.document_id}/versions/${version.version_id}/reindex`)).data;
+      message.success(`Đã lập chỉ mục lại v${version.version_number}: ${indexLabels[updated.index_status || '']?.text || updated.index_status}.`);
+      await loadVersions(versionDocument);
+    } catch (error) { message.error(await aiErrorMessage(error, 'Không lập chỉ mục lại được phiên bản.')); }
+    finally { setSaving(false); }
+  };
   const reviewVersion = async (version: Version, document = versionDocument) => {
     if (!document) return;
     setReviewLoading(true);
@@ -322,6 +349,44 @@ export function KnowledgePage() {
     } catch (error) { message.error(await aiErrorMessage(error, 'Không khôi phục được tài liệu.')); }
     finally { setSaving(false); }
   };
+  // Only one version is published at a time; the backend archives the previous one.
+  const activateVersion = (version: Version) => {
+    if (!versionDocument) return;
+    const document = versionDocument;
+    const current = versions.find(item => item.version_id === document.current_version_id && item.status === 'PUBLISHED');
+    Modal.confirm({
+      title: `Công bố lại v${version.version_number}?`,
+      content: current
+        ? `v${current.version_number} đang công bố sẽ ngừng dùng. AI và người đọc chuyển sang v${version.version_number} ngay; file và các mục được kiểm tra lại trước khi đổi.`
+        : `AI và người đọc sẽ dùng v${version.version_number}; file và các mục được kiểm tra lại trước khi công bố.`,
+      okText: 'Công bố bản này', cancelText: 'Hủy',
+      onOk: async () => {
+        try {
+          await api.post(`/ai/knowledge/${document.document_id}/versions/${version.version_id}/activate`);
+          message.success(`Đã chuyển sang v${version.version_number}.`);
+          setVersionDocument({ ...document, status: 'PUBLISHED', current_version_id: version.version_id });
+          await Promise.all([loadVersions(document), load()]);
+        } catch (error) { message.error(await aiErrorMessage(error, 'Không công bố lại được phiên bản này.')); }
+      },
+    });
+  };
+  const unpublishDocument = (version: Version) => {
+    if (!versionDocument) return;
+    const document = versionDocument;
+    Modal.confirm({
+      title: `Ngừng công bố v${version.version_number}?`,
+      content: 'Tài liệu sẽ không còn phiên bản nào được công bố: AI ngừng trích dẫn và nhân viên không mở được nữa. Các phiên bản vẫn được giữ để công bố lại sau.',
+      okText: 'Ngừng công bố', okButtonProps: { danger: true }, cancelText: 'Hủy',
+      onOk: async () => {
+        try {
+          const { data } = await api.post<Document>(`/ai/knowledge/${document.document_id}/unpublish`);
+          message.success('Đã ngừng công bố tài liệu.');
+          setVersionDocument(data);
+          await Promise.all([loadVersions(data), load()]);
+        } catch (error) { message.error(await aiErrorMessage(error, 'Không ngừng công bố được tài liệu.')); }
+      },
+    });
+  };
   const archiveDocument = async (document: Document) => {
     try {
       await api.post(`/ai/knowledge/${document.document_id}/archive`);
@@ -377,13 +442,23 @@ export function KnowledgePage() {
     columns={[
       { title: 'Phiên bản', dataIndex: 'version_number', render: (value: number) => `v${value}` },
       { title: 'Tên', dataIndex: 'title' }, { title: 'Số trang', dataIndex: 'page_count', render: (value: number | null) => value ?? 'Văn bản' },
-      { title: 'Trạng thái', dataIndex: 'status', render: (value: string) => <Tag color={value === 'PUBLISHED' ? 'green' : 'default'}>{statusLabels[value]}</Tag> },
+      { title: 'Trạng thái', render: (_, version: Version) => version.status === 'PUBLISHED'
+        ? <Tag color="green">Đang công bố</Tag>
+        : <Tag>{version.status === 'ARCHIVED' && versionDocument?.status !== 'ARCHIVED' ? 'Ngừng dùng' : statusLabels[version.status]}</Tag> },
+      { title: 'Chỉ mục AI', render: (_, version: Version) => version.page_count ? <Space wrap size={4}>
+        {version.extraction_method && <Tag>{extractionLabels[version.extraction_method] || version.extraction_method}</Tag>}
+        {version.index_status && <Tag color={indexLabels[version.index_status]?.color}>{indexLabels[version.index_status]?.text || version.index_status}</Tag>}
+      </Space> : null },
       { title: 'Thao tác', render: (_, version: Version) => version.page_count ? <Space wrap>
         <Button size="small" icon={<EyeOutlined />} href={`/knowledge/view/${versionDocument?.document_id}?version=${version.version_id}&preview=true`} target="_blank" rel="noopener noreferrer">Xem PDF</Button>
         <Button size="small" icon={<DownloadOutlined />} onClick={() => { if (versionDocument) void downloadPdf(versionDocument, version).catch(async error => message.error(await aiErrorMessage(error, 'Không tải được PDF.'))); }}>Tải</Button>
         {version.status === 'DRAFT' && versionDocument?.status !== 'ARCHIVED' && <>
           <Button type="primary" size="small" loading={reviewLoading} onClick={() => void reviewVersion(version)}>Kiểm tra & công bố</Button>
         </>}
+        {version.status === 'PUBLISHED' && version.index_status !== 'READY' && <Button size="small" icon={<ReloadOutlined />} loading={saving}
+          onClick={() => void reindexVersion(version)}>Lập chỉ mục lại</Button>}
+        {version.status === 'PUBLISHED' && <Button size="small" danger onClick={() => unpublishDocument(version)}>Ngừng công bố</Button>}
+        {version.status === 'ARCHIVED' && versionDocument?.status !== 'ARCHIVED' && <Button size="small" onClick={() => activateVersion(version)}>Công bố bản này</Button>}
       </Space> : null },
     ]} />;
   return <Space orientation="vertical" size="large" style={{ width: '100%' }}>
@@ -477,13 +552,15 @@ export function KnowledgePage() {
           { key: 'title', label: 'Tên được công bố', children: reviewingVersion.title },
           { key: 'role', label: 'Người được đọc', children: roleLabels[reviewingVersion.minimum_role] || reviewingVersion.minimum_role },
           { key: 'date', label: 'Hiệu lực', children: `${reviewingVersion.effective_from ? new Date(reviewingVersion.effective_from + 'T00:00:00').toLocaleDateString('vi-VN') : 'Từ khi công bố'} → ${reviewingVersion.effective_to ? new Date(reviewingVersion.effective_to + 'T00:00:00').toLocaleDateString('vi-VN') : 'Không đặt ngày kết thúc'}` },
+          { key: 'structure', label: 'Cách chia mục', children: extractionLabels[reviewingVersion.extraction_method || ''] || 'Không xác định' },
           { key: 'pdf', label: 'PDF nguồn', children: <Space wrap><Typography.Text>{reviewingVersion.page_count} trang</Typography.Text>
             <Button icon={<EyeOutlined />} href={`/knowledge/view/${versionDocument.document_id}?version=${reviewingVersion.version_id}&preview=true`} target="_blank" rel="noopener noreferrer">Xem PDF ở tab riêng</Button></Space> },
         ]} />
         {!reviewSections.some(section => section.is_answerable) && <Alert type="warning" showIcon title="Chưa bật mục nào cho AI. Sau công bố, AI vẫn chưa thể trả lời từ tài liệu này." />}
         <Collapse style={{ width: '100%' }} items={[{ key: 'sections', label: `Nội dung AI được dùng (${reviewSections.filter(section => section.is_answerable).length}/${reviewSections.length} mục)`, children:
         <Table rowKey="section_id" size="small" pagination={false} dataSource={reviewSections} scroll={{ y: 280 }} columns={[
-          { title: 'Mục trong PDF', dataIndex: 'heading' },
+          { title: 'Mục trong PDF', render: (_, section: Section) => <span style={{ paddingLeft: Math.max(0, (section.level || 1) - 1) * 16 }}
+            title={section.heading_path || section.heading}>{section.heading}</span> },
           { title: 'Trang', render: (_, section: Section) => section.page_start === section.page_end ? section.page_start : `${section.page_start}–${section.page_end}` },
           { title: 'AI sử dụng', dataIndex: 'is_answerable', render: (value: boolean) => <Tag color={value ? 'green' : 'default'}>{value ? 'Được dùng' : 'Không dùng'}</Tag> },
         ]} /> }]} />

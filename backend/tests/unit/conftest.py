@@ -21,6 +21,15 @@ def forbid_unmocked_provider_client(monkeypatch):
     assert not unexpected_calls, "Unit test attempted an unmocked provider call"
 
 
+@pytest.fixture(autouse=True)
+def knowledge_provider_features_off(monkeypatch):
+    """Developer .env opt-ins (embeddings, PDF structure, rule tags) must not
+    reach unit tests; tests that need them enable them explicitly."""
+    from app.core.config import settings
+    for flag in ("GEMINI_EMBEDDINGS_ENABLED", "GEMINI_PDF_STRUCTURE_ENABLED", "GEMINI_KNOWLEDGE_TAGGING_ENABLED"):
+        monkeypatch.setattr(settings, flag, False)
+
+
 # Legacy upstream integration suites live under tests/unit for now. Exempt only
 # these known DB-backed modules, rather than disabling the guard for future tests.
 _LEGACY_DB_TEST_MODULES = frozenset({

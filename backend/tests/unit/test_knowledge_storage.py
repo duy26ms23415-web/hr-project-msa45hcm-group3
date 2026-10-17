@@ -154,3 +154,34 @@ def test_object_graph_traversal_handles_nested_cycles_and_deep_structures():
     for _ in range(1500):
         nested = {"/First": nested}
     assert _contains_forbidden_action(nested)
+
+
+def test_attachments_are_rejected_with_their_own_code_but_never_mask_javascript():
+    writer = PdfWriter()
+    writer.append(PdfReader(BytesIO(make_pdf())))
+    writer.add_attachment("Content Credentials", b"c2pa manifest")
+    attached = BytesIO()
+    writer.write(attached)
+    with pytest.raises(PDFValidationError, match="PDF_ATTACHMENT_NOT_ALLOWED"):
+        parse_pdf(attached.getvalue())
+    writer.add_js("app.alert('blocked')")
+    both = BytesIO()
+    writer.write(both)
+    with pytest.raises(PDFValidationError, match="PDF_ACTIVE_CONTENT"):
+        parse_pdf(both.getvalue())
+
+
+def test_internal_toc_links_are_allowed():
+    from pypdf.generic import ArrayObject, FloatObject
+    writer = PdfWriter()
+    writer.append(PdfReader(BytesIO(make_pdf())))
+    writer.add_blank_page(width=612, height=792)
+    link = DictionaryObject({
+        NameObject("/Type"): NameObject("/Annot"), NameObject("/Subtype"): NameObject("/Link"),
+        NameObject("/Rect"): ArrayObject([FloatObject(0), FloatObject(0), FloatObject(10), FloatObject(10)]),
+        NameObject("/Dest"): ArrayObject([writer.pages[1].indirect_reference, NameObject("/Fit")]),
+    })
+    writer.pages[0][NameObject("/Annots")] = ArrayObject([writer._add_object(link)])
+    output = BytesIO()
+    writer.write(output)
+    assert parse_pdf(output.getvalue()).pages[0] == "Leave Policy"

@@ -55,6 +55,8 @@ class KnowledgeSectionInput(BaseModel):
     page_start: StrictInt = Field(gt=0, le=100)
     page_end: StrictInt = Field(gt=0, le=100)
     is_answerable: StrictBool = True
+    level: StrictInt | None = Field(default=None, ge=1, le=6)
+    heading_path: str | None = Field(default=None, max_length=2000)
 
     @field_validator("heading")
     @classmethod
@@ -74,6 +76,8 @@ class KnowledgeSectionRead(BaseModel):
     page_end: int | None
     anchor: str | None
     is_answerable: bool
+    level: int | None = None
+    heading_path: str | None = None
 
 
 class KnowledgeVersionRead(BaseModel):
@@ -91,6 +95,9 @@ class KnowledgeVersionRead(BaseModel):
     effective_from: date | None
     effective_to: date | None
     created_at: datetime
+    extraction_method: str | None = None
+    index_status: str | None = None
+    embedding_model: str | None = None
 
 
 class KnowledgeVersionWrite(BaseModel):

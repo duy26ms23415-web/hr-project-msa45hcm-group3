@@ -5,7 +5,7 @@ from app.models.holiday import Holiday
 from app.models.attendance import QRCard, AttendanceEvent, AttendanceDay, AttendanceFix
 from app.models.leave import LeaveType, EmployeeLeaveBalance, LeaveRequest
 from app.models.payroll import EmployeeCompensation, PayrollPeriod, PayrollLine
-from app.models.knowledge import KnowledgeDocument, KnowledgeDocumentVersion, KnowledgeSection, AIChatDraft, ReportRun
+from app.models.knowledge import KnowledgeDocument, KnowledgeDocumentVersion, KnowledgeSection, KnowledgeChunk, AIConversationState, AIChatDraft, ReportRun
 from app.models.ai_security import AIRequestEvent
 from app.models.ai_role_scope import AIRoleScopePolicy
 
@@ -31,6 +31,8 @@ __all__ = [
     "KnowledgeDocument",
     "KnowledgeDocumentVersion",
     "KnowledgeSection",
+    "KnowledgeChunk",
+    "AIConversationState",
     "AIChatDraft",
     "ReportRun",
     "AIRequestEvent",

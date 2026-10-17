@@ -1,8 +1,16 @@
 from datetime import date, datetime
-from sqlalchemy import BigInteger, String, Text, DateTime, ForeignKey, Integer, Boolean, Date, JSON, CheckConstraint, UniqueConstraint, Index
+from pgvector.sqlalchemy import Vector
+from sqlalchemy import BigInteger, String, Text, DateTime, ForeignKey, Integer, SmallInteger, Boolean, Date, JSON, CheckConstraint, Computed, UniqueConstraint, Index
+from sqlalchemy.dialects.postgresql import ARRAY, TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy import text
 from sqlalchemy.sql import func
 from app.core.database import Base
+
+# Changing the dimension requires a migration and a full reindex.
+EMBEDDING_DIM = 768
+RULE_TYPES = ("PROHIBITION", "OBLIGATION", "PERMISSION", "PROCEDURE", "INFO")
+RULE_DOMAINS = ("LEAVE", "REMOTE", "ATTENDANCE", "ATTENDANCE_FIX", "PAYROLL", "REPORT", "CONDUCT", "GENERAL")
 
 
 class KnowledgeDocument(Base):
@@ -31,7 +39,10 @@ class KnowledgeDocumentVersion(Base):
         UniqueConstraint("document_id", "version_number", name="uq_ai_knowledge_doc_version"),
         CheckConstraint("status IN ('DRAFT', 'PUBLISHED', 'ARCHIVED')", name="ck_ai_knowledge_version_status"),
         CheckConstraint("effective_to IS NULL OR effective_from IS NULL OR effective_to >= effective_from", name="ck_ai_knowledge_effective_range"),
+        CheckConstraint("index_status IN ('PENDING', 'READY', 'LEXICAL_ONLY', 'FAILED')", name="ck_ai_knowledge_version_index_status"),
         Index("ix_ai_knowledge_versions_doc_status", "document_id", "status"),
+        Index("uq_ai_knowledge_one_published_version", "document_id", unique=True,
+              postgresql_where=text("status = 'PUBLISHED'")),
     )
 
     version_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
@@ -49,6 +60,10 @@ class KnowledgeDocumentVersion(Base):
     effective_to: Mapped[date | None] = mapped_column(Date, nullable=True)
     created_by_user_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("hr_user_accounts.user_account_id"), nullable=True)
     published_by_user_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("hr_user_accounts.user_account_id"), nullable=True)
+    # How sections were derived (LAYOUT, OUTLINE, PRINTED_TOC, MANUAL, GEMINI_*).
+    extraction_method: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    index_status: Mapped[str] = mapped_column(String(20), default="PENDING", server_default="PENDING", nullable=False)
+    embedding_model: Mapped[str | None] = mapped_column(String(100), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
@@ -76,9 +91,50 @@ class KnowledgeSection(Base):
     anchor: Mapped[str | None] = mapped_column(String(300), nullable=True)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     is_answerable: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    level: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
+    heading_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     version: Mapped[KnowledgeDocumentVersion] = relationship("KnowledgeDocumentVersion", back_populates="sections")
+
+
+class KnowledgeChunk(Base):
+    """Retrieval unit: a slice of one section with lexical and vector indexes."""
+    __tablename__ = "hr_ai_knowledge_chunks"
+    __table_args__ = (
+        UniqueConstraint("section_id", "chunk_index", name="uq_ai_knowledge_chunk_index"),
+        CheckConstraint("rule_type IN ('PROHIBITION', 'OBLIGATION', 'PERMISSION', 'PROCEDURE', 'INFO')", name="ck_ai_knowledge_chunk_rule_type"),
+        Index("ix_ai_knowledge_chunks_version", "version_id"),
+    )
+
+    chunk_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    section_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("hr_ai_knowledge_sections.section_id", ondelete="CASCADE"), nullable=False)
+    version_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("hr_ai_knowledge_document_versions.version_id", ondelete="CASCADE"), nullable=False)
+    chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    contextual_text: Mapped[str] = mapped_column(Text, nullable=False)
+    normalized_text: Mapped[str] = mapped_column(Text, nullable=False)
+    page_start: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    page_end: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    rule_type: Mapped[str] = mapped_column(String(20), default="INFO", server_default="INFO", nullable=False)
+    applies_to: Mapped[list[str]] = mapped_column(ARRAY(String(20)), default=list, server_default="{}", nullable=False)
+    embedding: Mapped[list[float] | None] = mapped_column(Vector(EMBEDDING_DIM), nullable=True)
+    search_tsv = mapped_column(TSVECTOR, Computed("to_tsvector('simple', normalized_text)", persisted=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class AIConversationState(Base):
+    """Owner-bound enum context for follow-ups; never holds message text."""
+    __tablename__ = "hr_ai_conversation_states"
+
+    owner_user_account_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("hr_user_accounts.user_account_id", ondelete="CASCADE"), primary_key=True)
+    last_intent: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    last_target: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    # Resolved employee code; reused only through the normal scoped lookup.
+    last_employee_code: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    last_section_ids: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
 
 class AIChatDraft(Base):

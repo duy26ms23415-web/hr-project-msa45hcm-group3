@@ -16,6 +16,14 @@ from app.core.config import settings
 
 
 MAX_PDF_PAGES = 100
+# Glyphs without a Unicode mapping (often arrows/minus signs) come out as NUL,
+# which PostgreSQL TEXT cannot store; other control characters are noise.
+_UNMAPPED_GLYPH = "\x00"
+_CONTROL_RE = re.compile(r"[\x01-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+
+def clean_extracted_text(text: str) -> str:
+    return _CONTROL_RE.sub(" ", text.replace(_UNMAPPED_GLYPH, "–"))
 MAX_EXTRACTED_CHARS = 1_500_000
 STORAGE_KEY_RE = re.compile(r"^[a-f0-9]{32}\.pdf$")
 FORBIDDEN_PDF_ACTIONS = {"/JavaScript", "/Launch", "/GoToR", "/URI", "/SubmitForm", "/ImportData", "/RichMedia"}
@@ -39,10 +47,19 @@ def _object(value):
     return value.get_object() if hasattr(value, "get_object") else value
 
 
-def _contains_forbidden_action(value, seen: set[int] | None = None) -> bool:
-    """Inspect the entire object graph, including forms and outline actions."""
+ACTIVE_KEYS = ("/JavaScript", "/JS", "/RichMedia", "/XFA")
+ATTACHMENT_KEYS = ("/EmbeddedFiles", "/EF", "/AF")
+
+
+def _forbidden_content(value, seen: set[int] | None = None) -> str | None:
+    """"ACTIVE", "ATTACHMENT" or None for the entire object graph.
+
+    Both are rejected; the distinction only gives HR an actionable message.
+    Active content wins, so an attachment never masks JavaScript or actions.
+    """
     if seen is None:
         seen = set()
+    found = None
     pending = [value]
     while pending:
         value = _object(pending.pop())
@@ -51,19 +68,24 @@ def _contains_forbidden_action(value, seen: set[int] | None = None) -> bool:
             continue
         seen.add(ident)
         if hasattr(value, "get"):
-            if str(_object(value.get("/S"))) in FORBIDDEN_PDF_ACTIONS:
-                return True
-            if any(key in value for key in ("/JavaScript", "/JS", "/EmbeddedFiles", "/EF", "/AF", "/RichMedia", "/XFA")):
-                return True
+            if str(_object(value.get("/S"))) in FORBIDDEN_PDF_ACTIONS or any(key in value for key in ACTIVE_KEYS):
+                return "ACTIVE"
+            if any(key in value for key in ATTACHMENT_KEYS):
+                found = "ATTACHMENT"
             # Traverse all dictionary children: /AcroForm, /Fields, /Outlines,
             # event dictionaries and indirect references can hide active content.
             pending.extend(value.values())
         elif isinstance(value, (list, tuple)):
             pending.extend(value)
-    return False
+    return found
 
 
-def parse_pdf(data: bytes, max_bytes: int | None = None) -> ParsedPDF:
+def _contains_forbidden_action(value, seen: set[int] | None = None) -> bool:
+    return _forbidden_content(value, seen) is not None
+
+
+def parse_pdf(data: bytes, max_bytes: int | None = None, *, allow_textless: bool = False) -> ParsedPDF:
+    """Validate a PDF; allow_textless admits scanned files that Gemini will transcribe."""
     limit = max_bytes or settings.AI_KNOWLEDGE_MAX_UPLOAD_BYTES
     if not data or len(data) > limit:
         raise PDFValidationError("PDF_SIZE_INVALID")
@@ -74,13 +96,17 @@ def parse_pdf(data: bytes, max_bytes: int | None = None) -> ParsedPDF:
         if reader.is_encrypted:
             raise PDFValidationError("PDF_ENCRYPTED")
         root = _object(reader.trailer["/Root"])
-        if _contains_forbidden_action(root) or any(_contains_forbidden_action(page) for page in reader.pages):
+        seen: set[int] = set()
+        findings = {_forbidden_content(item, seen) for item in [root, *reader.pages]}
+        if "ACTIVE" in findings:
             raise PDFValidationError("PDF_ACTIVE_CONTENT")
+        if "ATTACHMENT" in findings:
+            raise PDFValidationError("PDF_ATTACHMENT_NOT_ALLOWED")
         pages = reader.pages
         if not 1 <= len(pages) <= MAX_PDF_PAGES:
             raise PDFValidationError("PDF_PAGE_LIMIT")
-        extracted = [(page.extract_text() or "").strip() for page in pages]
-        if not any(extracted):
+        extracted = [clean_extracted_text(page.extract_text() or "").strip() for page in pages]
+        if not any(extracted) and not allow_textless:
             raise PDFValidationError("PDF_TEXT_REQUIRED")
         if sum(map(len, extracted)) > MAX_EXTRACTED_CHARS:
             raise PDFValidationError("PDF_TEXT_LIMIT")

@@ -6,7 +6,7 @@ from app.core.ai_errors import MESSAGES, install_ai_errors
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('code', ['PDF_TEXT_REQUIRED', 'PDF_ENCRYPTED', 'PDF_SIZE_INVALID', 'PDF_ACTIVE_CONTENT'])
+@pytest.mark.parametrize('code', ['PDF_TEXT_REQUIRED', 'PDF_ENCRYPTED', 'PDF_SIZE_INVALID', 'PDF_ACTIVE_CONTENT', 'PDF_ATTACHMENT_NOT_ALLOWED'])
 async def test_pdf_validation_has_specific_safe_message(code):
     app = FastAPI()
     install_ai_errors(app, ['/ai'])
