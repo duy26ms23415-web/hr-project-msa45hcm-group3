@@ -67,6 +67,11 @@ const indexLabels: Record<string, { text: string; color: string }> = {
   LEXICAL_ONLY: { text: 'Chỉ tìm theo từ khóa', color: 'gold' },
   FAILED: { text: 'Lỗi lập chỉ mục', color: 'red' },
 };
+// Published versions are tagged and embedded in a background task after publish/reindex.
+const indexLabel = (version: Pick<Version, 'status' | 'index_status'>) =>
+  version.status === 'PUBLISHED' && version.index_status === 'PENDING'
+    ? { text: 'Đang lập chỉ mục ngữ nghĩa (tạm tìm theo từ khóa)', color: 'processing' }
+    : indexLabels[version.index_status || ''] || { text: version.index_status || '', color: 'default' };
 const searchText = (value: string) => value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/gi, 'd').toLowerCase().trim();
 
 function SectionFields({ form }: { form: FormInstance }) {
@@ -194,6 +199,18 @@ export function KnowledgePage() {
     catch { message.error('Không tải được lịch sử phiên bản.'); }
     finally { setVersionsLoading(false); }
   };
+  const indexing = versions.some(version => version.status === 'PUBLISHED' && version.index_status === 'PENDING');
+  useEffect(() => {
+    if (!versionDocument || !indexing) return;
+    // Tags and embeddings run in a background task after publish/reindex: refresh quietly until it settles (≤ 2 min).
+    let tries = 0;
+    const timer = window.setInterval(() => {
+      if (++tries > 24) { window.clearInterval(timer); return; }
+      api.get<Version[]>(`/ai/knowledge/${versionDocument.document_id}/versions`)
+        .then(response => setVersions(response.data)).catch(() => undefined);
+    }, 5000);
+    return () => window.clearInterval(timer);
+  }, [versionDocument, indexing]);
   const openVersions = (document: Document) => {
     setVersionDocument(document);
     setPdfTab('versions');
@@ -240,7 +257,7 @@ export function KnowledgePage() {
     setSaving(true);
     try {
       const updated = (await api.post<Version>(`/ai/knowledge/${versionDocument.document_id}/versions/${version.version_id}/reindex`)).data;
-      message.success(`Đã lập chỉ mục lại v${version.version_number}: ${indexLabels[updated.index_status || '']?.text || updated.index_status}.`);
+      message.success(`Đã lập chỉ mục lại v${version.version_number}: ${indexLabel(updated).text}.`);
       await loadVersions(versionDocument);
     } catch (error) { message.error(await aiErrorMessage(error, 'Không lập chỉ mục lại được phiên bản.')); }
     finally { setSaving(false); }
@@ -447,7 +464,7 @@ export function KnowledgePage() {
         : <Tag>{version.status === 'ARCHIVED' && versionDocument?.status !== 'ARCHIVED' ? 'Ngừng dùng' : statusLabels[version.status]}</Tag> },
       { title: 'Chỉ mục AI', render: (_, version: Version) => version.page_count ? <Space wrap size={4}>
         {version.extraction_method && <Tag>{extractionLabels[version.extraction_method] || version.extraction_method}</Tag>}
-        {version.index_status && <Tag color={indexLabels[version.index_status]?.color}>{indexLabels[version.index_status]?.text || version.index_status}</Tag>}
+        {version.index_status && <Tag color={indexLabel(version).color}>{indexLabel(version).text}</Tag>}
       </Space> : null },
       { title: 'Thao tác', render: (_, version: Version) => version.page_count ? <Space wrap>
         <Button size="small" icon={<EyeOutlined />} href={`/knowledge/view/${versionDocument?.document_id}?version=${version.version_id}&preview=true`} target="_blank" rel="noopener noreferrer">Xem PDF</Button>
