@@ -2,10 +2,12 @@ import calendar
 from datetime import date, datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
 import io
-from typing import List, Dict, Any, Tuple
-import openpyxl
+from typing import List, Dict, Tuple
+from openpyxl import Workbook
+from openpyxl.worksheet.worksheet import Worksheet
+from openpyxl.utils import get_column_letter
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-from sqlalchemy import select, and_
+from sqlalchemy import select, and_, or_, delete
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import HTTPException, status
@@ -14,7 +16,7 @@ from app.models.organization import Employee
 from app.models.holiday import Holiday
 from app.models.attendance import AttendanceDay
 from app.models.leave import LeaveRequest
-from app.models.payroll import EmployeeCompensation, PayrollPeriod, PayrollLine
+from app.models.payroll import PayrollPeriod, PayrollLine
 
 
 class PayrollService:
@@ -125,7 +127,7 @@ class PayrollService:
             and_(
                 Holiday.holiday_date >= start_date,
                 Holiday.holiday_date <= end_date,
-                Holiday.is_paid == True
+                Holiday.is_paid.is_(True)
             )
         )
         holidays = (await db.execute(stmt_holidays)).scalars().all()
@@ -138,9 +140,16 @@ class PayrollService:
                 standard_work_days_count += 1
         standard_days_dec = Decimal(str(standard_work_days_count))
 
-        # Query all active employees with active compensation
+        # Query all active or in-scope employees who worked in this period
         stmt_emp = select(Employee).where(
-            Employee.employment_status == "ACTIVE"
+            and_(
+                Employee.hire_date <= end_date,
+                or_(
+                    Employee.termination_date.is_(None),
+                    Employee.termination_date >= start_date
+                ),
+                Employee.employment_status.in_(["ACTIVE", "TERMINATED"])
+            )
         ).options(
             selectinload(Employee.compensations),
             selectinload(Employee.department),
@@ -149,16 +158,17 @@ class PayrollService:
         employees = (await db.execute(stmt_emp)).scalars().all()
 
         # Explicitly delete existing lines before recalculating to respect unique constraint
-        from sqlalchemy import delete
         await db.execute(delete(PayrollLine).where(PayrollLine.payroll_period_id == period.payroll_period_id))
         await db.flush()
 
         for emp in employees:
-            # Get valid compensation profile
-            active_comp = next(
-                (c for c in emp.compensations if c.effective_from <= end_date and (c.effective_to is None or c.effective_to >= start_date)),
-                None
-            )
+            # Get valid compensation profile (prioritize newest effective_from)
+            valid_comps = [
+                c for c in emp.compensations
+                if c.effective_from <= end_date and (c.effective_to is None or c.effective_to >= start_date)
+            ]
+            valid_comps.sort(key=lambda c: c.effective_from, reverse=True)
+            active_comp = valid_comps[0] if valid_comps else None
             if not active_comp:
                 continue
 
@@ -202,6 +212,12 @@ class PayrollService:
                 if d.weekday() >= 5:
                     continue  # Weekend
 
+                # Skip dates outside employee's tenure (hired after date or terminated before date)
+                if d < emp.hire_date:
+                    continue
+                if emp.termination_date and d > emp.termination_date:
+                    continue
+
                 # Check holiday
                 if d in holiday_dates:
                     actual_paid_days += Decimal("1.0")
@@ -239,8 +255,8 @@ class PayrollService:
             # Insurance & PIT
             bhxh, bhyt, bhtn, total_ins = PayrollService.calculate_insurance(gross_salary)
             # [FIX #7] Pass employee's dependent_count for proper PIT dependent deduction.
-            # Falls back to 0 if the column hasn't been added via migration yet.
-            emp_dependent_count = getattr(emp, 'dependent_count', 0) or 0
+            # Falls back to 0 if the column hasn't been added via migration yet or is negative.
+            emp_dependent_count = max(0, getattr(emp, 'dependent_count', 0) or 0)
             taxable_inc, pit_tax = PayrollService.calculate_pit_tax(gross_salary, total_ins, emp_dependent_count)
             net_salary = max(Decimal("0.00"), gross_salary - total_ins - pit_tax)
 
@@ -312,12 +328,13 @@ class PayrollService:
         if period.status not in {"CALCULATED", "APPROVED", "CLOSED"}:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Payroll report unavailable")
 
-        wb = openpyxl.Workbook()
-        ws = wb.active
+        wb = Workbook()
+        active_sheet = wb.active
+        ws: Worksheet = active_sheet if isinstance(active_sheet, Worksheet) else wb.create_sheet()
         ws.title = f"Bảng Lương Tháng {period.period_month}-{period.period_year}"
 
-        # Title formatting
-        ws.merge_cells("A1:K1")
+        # Title formatting (12 columns: A to L)
+        ws.merge_cells("A1:L1")
         title_cell = ws["A1"]
         title_cell.value = f"BẢNG THANH TOÁN LƯƠNG NHÂN VIÊN - THÁNG {period.period_month}/{period.period_year}"
         title_cell.font = Font(name="Arial", size=16, bold=True, color="1F4E79")
@@ -383,8 +400,11 @@ class PayrollService:
         # Auto adjust column widths
         for col in ws.columns:
             max_len = max(len(str(cell.value or '')) for cell in col)
-            col_letter = openpyxl.utils.get_column_letter(col[0].column)
-            ws.column_dimensions[col_letter].width = max(max_len + 4, 12)
+            first_cell = col[0]
+            col_idx = first_cell.column
+            if isinstance(col_idx, int):
+                col_letter = get_column_letter(col_idx)
+                ws.column_dimensions[col_letter].width = max(max_len + 4, 12)
 
         output = io.BytesIO()
         wb.save(output)

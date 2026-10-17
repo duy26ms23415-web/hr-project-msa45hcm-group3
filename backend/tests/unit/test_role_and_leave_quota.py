@@ -10,7 +10,7 @@ from app.models.organization import Employee, Department, Position
 from app.models.auth import Role, UserAccount, UserRoleAssignment
 from app.models.leave import EmployeeLeaveBalance
 from app.services.leave_service import LeaveService
-from sqlalchemy import select, delete
+from sqlalchemy import select
 
 
 @pytest.mark.asyncio
@@ -20,6 +20,8 @@ async def test_manager_leave_quota_18_days_vs_employee_12_days():
         # 1. Create a dummy employee with MANAGER role
         dept = (await db.execute(select(Department))).scalars().first()
         pos = (await db.execute(select(Position))).scalars().first()
+        assert dept is not None
+        assert pos is not None
         mgr_role = (await db.execute(select(Role).where(Role.role_code == "MANAGER"))).scalar_one()
         emp_role = (await db.execute(select(Role).where(Role.role_code == "EMPLOYEE"))).scalar_one()
 
@@ -87,6 +89,8 @@ async def test_manager_leave_quota_upgrades_existing_12_days():
     async with AsyncSessionLocal() as db:
         dept = (await db.execute(select(Department))).scalars().first()
         pos = (await db.execute(select(Position))).scalars().first()
+        assert dept is not None
+        assert pos is not None
         mgr_role = (await db.execute(select(Role).where(Role.role_code == "MANAGER"))).scalar_one()
 
         code = f"TEST_UP_{secrets.token_hex(4)}"

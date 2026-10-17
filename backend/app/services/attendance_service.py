@@ -46,8 +46,26 @@ class AttendanceService:
         work_date = local_in.date()
         window_start = datetime.combine(work_date, time(8, 0), tzinfo=local_timezone)
         window_end = datetime.combine(work_date, time(17, 0), tzinfo=local_timezone)
-        effective_start = max(local_in, window_start)
-        effective_end = min(local_out, window_end)
+
+        # 1-minute grace period for morning arrival:
+        # Check-in between 08:00 and 08:01 is credited as 08:00
+        if window_start <= local_in <= window_start + timedelta(minutes=1):
+            effective_start = window_start
+        else:
+            # Drop seconds so seconds don't truncate a whole minute
+            effective_start = max(local_in.replace(second=0, microsecond=0), window_start)
+
+        # 1-minute grace period for evening departure:
+        # Check-out between 16:59 and 17:00 is credited as 17:00
+        if window_end - timedelta(minutes=1) <= local_out <= window_end:
+            effective_end = window_end
+        else:
+            # Round check-out seconds to nearest minute
+            rounded_out = local_out.replace(second=0, microsecond=0)
+            if local_out.second >= 30:
+                rounded_out += timedelta(minutes=1)
+            effective_end = min(rounded_out, window_end)
+
         if effective_end <= effective_start:
             return 0
 
@@ -182,18 +200,34 @@ class AttendanceService:
         ).order_by(AttendanceEvent.occurred_at.asc())
         events = (await db.execute(stmt)).scalars().all()
 
-        check_ins = [e.occurred_at for e in events if e.event_type == "CHECK_IN"]
-        check_outs = [e.occurred_at for e in events if e.event_type == "CHECK_OUT"]
+        # Collect all event timestamps for the day, ordered chronologically
+        event_times = sorted([e.occurred_at for e in events])
 
-        first_in = check_ins[0] if check_ins else None
-        last_out = check_outs[-1] if check_outs else None
+        # If there are 2 or more distinct events in the day, the earliest event is the
+        # start of work (check-in) and the latest event is the end of work (check-out).
+        # This handles cases where kiosk recorded the only evening scan as CHECK_IN,
+        # and a subsequent approved fix adds the morning scan as CHECK_IN too.
+        if len(event_times) >= 2 and event_times[0] < event_times[-1]:
+            first_in = event_times[0]
+            last_out = event_times[-1]
+        elif len(event_times) == 1:
+            ev = events[0]
+            if ev.event_type == "CHECK_IN":
+                first_in = ev.occurred_at
+                last_out = None
+            else:
+                first_in = None
+                last_out = ev.occurred_at
+        else:
+            first_in = None
+            last_out = None
 
         worked_mins = 0
         if first_in and last_out:
             worked_mins = AttendanceService.calculate_worked_minutes(first_in, last_out)
 
         # Status evaluation according to standard office hours (8h/day = 480 mins):
-        # - >= 480 mins (8h full day): PRESENT (1.0 work credit)
+        # - >= 480 mins (8h full day with 1m grace period): PRESENT (1.0 work credit)
         # - >= 240 mins (4h to < 8h): HALF_DAY (0.5 work credit)
         # - < 240 mins or missing check-in/out: INCOMPLETE (0.0 work credit)
         if first_in and last_out:
@@ -245,6 +279,29 @@ class AttendanceService:
         fix_in: AttendanceFixCreate
     ) -> AttendanceFix:
         """Create a pending attendance fix/justification request"""
+        local_tz = timezone(timedelta(hours=7))
+        req_at = fix_in.requested_at
+        if req_at.tzinfo is None:
+            # Naive datetime from client form is interpreted as Vietnam local time
+            req_local = req_at.replace(tzinfo=local_tz)
+        else:
+            req_local = req_at.astimezone(local_tz)
+
+        # 1. Validate work_date is not in the future
+        today_vn = datetime.now(timezone.utc).astimezone(local_tz).date()
+        if fix_in.work_date > today_vn:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Không thể tạo đơn giải trình chấm công cho ngày trong tương lai."
+            )
+
+        # 2. Validate requested_at belongs to work_date
+        if req_local.date() != fix_in.work_date:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Thời gian giải trình ({req_local.date()}) phải thuộc ngày làm việc ({fix_in.work_date})."
+            )
+
         # [FIX #8] Enforce monthly cap on attendance fix requests.
         # Maximum 3 approved + pending fix requests per employee per month
         # to prevent abuse of the correction mechanism.
@@ -374,6 +431,8 @@ class AttendanceService:
             req_at = fix.requested_at
             if req_at.tzinfo is None:
                 req_at = req_at.replace(tzinfo=timezone(timedelta(hours=7))).astimezone(timezone.utc)
+            else:
+                req_at = req_at.astimezone(timezone.utc)
 
             event = AttendanceEvent(
                 employee_id=fix.employee_id,

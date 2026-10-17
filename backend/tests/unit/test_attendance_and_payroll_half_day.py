@@ -139,7 +139,8 @@ async def test_payroll_calculation_half_day_and_leave_integration():
                 base_monthly_salary=Decimal("20000000"),
                 fixed_allowance=Decimal("1000000"),
                 effective_from=date(2026, 1, 1),
-                is_active=True
+                effective_to=None,
+                created_by_user_id=1
             )
             db.add(comp)
             await db.commit()
