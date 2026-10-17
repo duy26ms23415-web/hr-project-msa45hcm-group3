@@ -5,7 +5,7 @@ import { SendOutlined, RobotOutlined, UserOutlined, ThunderboltOutlined, PlusOut
 import api from '../api/client';
 import dayjs from 'dayjs';
 import type { ReportDefinition, ReportInputs, ReportRunCreateResponse, ReportScope } from '../types/reports';
-import { acceptsServerSuggestions, actorChanged, canSubmitChat, chatErrorMessage, chatFailureState, draftKind, draftProgress, draftQuickReplies, nearBottom, newChatRequestKey, readableISODate, replyBlocks, replyPlainText, reportPeriodValid } from '../api/aiChatState';
+import { acceptsServerSuggestions, actorChanged, canSubmitChat, chatErrorMessage, chatFailureState, draftKind, draftProgress, draftQuickReplies, nearBottom, newChatRequestKey, queuedFollowUp, readableISODate, replyBlocks, replyPlainText, reportPeriodValid } from '../api/aiChatState';
 import type { DraftKind, ReplySpan } from '../api/aiChatState';
 import { ChatReportPreview } from './ChatReportPreview';
 import { Link, useNavigate } from 'react-router-dom';
@@ -74,6 +74,7 @@ export const AIChatModal: React.FC<AIChatModalProps> = ({ open, onClose }) => {
   const [previewAnalysis, setPreviewAnalysis] = useState<AIReportAnalysis | null>(null);
   // One message typed while a reply is pending is sent right after it, not dropped.
   const [queuedText, setQueuedText] = useState<string | null>(null);
+  const [lastSendFailed, setLastSendFailed] = useState(false);
   const [editingRunId, setEditingRunId] = useState<string | null>(null);
   const [lastReportRunId, setLastReportRunId] = useState<string | null>(null);
   const [reportSetup, setReportSetup] = useState<ReportInputs | null>(null);
@@ -174,6 +175,7 @@ export const AIChatModal: React.FC<AIChatModalProps> = ({ open, onClose }) => {
     }
     if (!text || loading || !canSubmitChat(draftRestartRequired)) return;
     setRetryMessage(null);
+    setLastSendFailed(false);
 
     const userMsg: ChatMessage = {
       id: newId(),
@@ -257,6 +259,7 @@ export const AIChatModal: React.FC<AIChatModalProps> = ({ open, onClose }) => {
       // Stable envelope `{code, message}` on /ai; plain `detail` elsewhere.
       const code = err?.response?.data?.code ?? err?.response?.data?.detail;
       const failure = chatFailureState(status, code);
+      setLastSendFailed(true);
       if (!failure.uncertainOutcome && !failure.retryable) uncertainRequestRef.current = null;
       if (failure.clearDraft) {
         setActiveDraftId(null); setActiveDraftRevision(null); setMissingFields([]);
@@ -277,11 +280,12 @@ export const AIChatModal: React.FC<AIChatModalProps> = ({ open, onClose }) => {
 
   useEffect(() => {
     if (loading || !queuedText) return;
-    const text = queuedText;
+    const next = queuedFollowUp(queuedText, lastSendFailed);
     setQueuedText(null);
-    void handleSendMessage(text);
+    if (next.restore) setInputVal(next.restore);  // The failed reply may still have saved something: check first.
+    if (next.send) void handleSendMessage(next.send);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loading, queuedText]);
+  }, [loading, queuedText, lastSendFailed]);
 
   const startFreshConversation = () => {
     if (loading) return;

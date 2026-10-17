@@ -197,3 +197,31 @@ async def test_rule_path_policy_interruption_keeps_unavailable_status(monkeypatc
     response = await ChatOrchestrator.process_chat(None, 7, AIChatRequest(
         message="Quy định nghỉ phép thế nào?", draft_id=draft.draft_id, draft_revision=3), {"EMPLOYEE"}, 9)
     assert (response.status, response.draft_id, response.missing_fields) == ("UNAVAILABLE", draft.draft_id, ["reason"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("message,lookup", [
+    ("hôm qua tôi quên chấm công", False),
+    ("hôm qua tôi chấm công lúc mấy giờ?", True),
+])
+async def test_open_fix_form_takes_attendance_statements_as_answers(monkeypatch, message, lookup):
+    from types import SimpleNamespace
+    from app.ai import orchestrator as module
+    from app.ai.orchestrator import ChatOrchestrator
+    from app.core.config import settings
+    from app.services.ai_draft_service import AIDraftService
+    from app.services.ai_service import AIService
+    monkeypatch.setattr(settings, "GEMINI_SEMANTIC_ENABLED", False)
+    draft = SimpleNamespace(draft_id="a" * 36, revision=3, status="COLLECTING", command="DRAFT_FIX", missing_fields=["work_date"])
+    monkeypatch.setattr(AIDraftService, "get_draft", AsyncMock(return_value=draft))
+    continued = AsyncMock(return_value=AIChatResponse(reply="form"))
+    monkeypatch.setattr(AIService, "_continue_draft", continued)
+    side = AsyncMock(return_value=AIChatResponse(reply="lookup"))
+    monkeypatch.setattr(module, "execute_registered", side)
+    response = await ChatOrchestrator.process_chat(None, 7, AIChatRequest(
+        message=message, draft_id=draft.draft_id, draft_revision=3), {"EMPLOYEE"}, 9)
+    assert response.reply == ("lookup" if lookup else "form")
+    if lookup:  # A side lookup keeps the form open.
+        assert response.draft_id == draft.draft_id
+    else:
+        assert continued.await_args.args[3] == message

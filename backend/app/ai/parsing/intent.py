@@ -102,8 +102,11 @@ def _form_slots(call: ActionCall, message: str) -> dict:
             slots[key] = _text(getattr(args, key))
     if call.spec.name == "draft_leave_request":
         code = "REMOTE" if args.mode == "REMOTE" else args.leave_type
-        # Annual leave is the type a guess would silently spend: accept it only when named.
-        if code == "ANNUAL" and not re.search(r"\b(?:phep nam|annual)\b", normalize(message)):
+        # A guess must not pick a type for the user: annual leave would silently spend the
+        # balance, and unpaid leave would stand in for it (and skip the balance warning).
+        # Accept them only when named; sick leave may be implied by the illness.
+        named = {"ANNUAL": r"\b(?:phep nam|annual)\b", "UNPAID": r"\b(?:khong (?:huong )?luong|unpaid)\b"}
+        if code in named and not re.search(named[code], normalize(message)):
             code = None
         if code:
             slots["leave_code"] = code

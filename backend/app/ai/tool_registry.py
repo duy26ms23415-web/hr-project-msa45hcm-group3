@@ -65,7 +65,8 @@ def attendance_period(message: str, today: date) -> tuple[date, date]:
         period = report_answers(message, today)
         start = date.fromisoformat(period["start_date"]) if period.get("start_date") else today.replace(day=1)
         end = date.fromisoformat(period["end_date"]) if period.get("end_date") else today
-    end = min(end, today)
+    if start <= today:
+        end = min(end, today)  # A future-only period ("ngày mai") stays as asked and reads as no data yet.
     if end < start or start.year != end.year:
         raise HTTPException(422, "INVALID_INPUT")
     return start, end

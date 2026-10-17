@@ -185,3 +185,13 @@ export function replyPlainText(content: string): string {
     : block.items.map((item, index) => `${block.ordered ? `${index + 1}.` : '-'} ${item.map((span) => span.text).join('')}`).join('\n'))
     .join('\n\n');
 }
+
+/**
+ * What happens to a message typed while a reply was pending, once that reply settles.
+ * After a failure the server may still have saved a draft or report, so the text goes back
+ * into the input for the user to check and resend, instead of being sent automatically.
+ */
+export function queuedFollowUp(queued: string | null, previousFailed: boolean): { send?: string; restore?: string } {
+  if (!queued) return {};
+  return previousFailed ? { restore: queued } : { send: queued };
+}

@@ -124,3 +124,9 @@ test('auto-scroll only follows a reader near the bottom', () => {
   assert.equal(aiState.nearBottom(900, 300, 1250), true);
   assert.equal(aiState.nearBottom(200, 300, 1250), false);
 });
+
+test('a message queued during a failed reply goes back to the input instead of being sent', () => {
+  assert.deepEqual(aiState.queuedFollowUp('ok', false), { send: 'ok' });
+  assert.deepEqual(aiState.queuedFollowUp('ok', true), { restore: 'ok' });
+  assert.deepEqual(aiState.queuedFollowUp(null, true), {});
+});

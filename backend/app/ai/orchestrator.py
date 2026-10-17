@@ -22,7 +22,7 @@ from app.services.ai_service import AIService, draft_reason_match, is_leave_bala
 from app.services.ai_suggestions import SUGGESTIONS, resolve_suggestion
 from app.services.knowledge_retrieval import normalize
 from app.ai.parsing.lexicon import canonical
-from app.ai.parsing.personal import asks_lateness, is_attendance_query, is_team_records_query, is_leave_status_query, is_own_salary_query, is_remote_request, is_rule_question
+from app.ai.parsing.personal import asks_lateness, asks_question, is_attendance_query, is_team_records_query, is_leave_status_query, is_own_salary_query, is_remote_request, is_rule_question
 from app.services.ai_employee_tool import AIEmployeeTool
 from app.services.report_run_service import ReportRunService
 from app.services.ai_employee_query import answer_employee_query, mentions_employee
@@ -192,7 +192,10 @@ class ChatOrchestrator:
                 raise HTTPException(409, "AI_DRAFT_REVISION_CONFLICT")
             return keep_draft(readonly, draft)
 
-        personal_lookup = is_leave_balance_query(text) or is_attendance_query(text)
+        # Mid-form, attendance wording is a side lookup only when asked as a question;
+        # a statement ("hôm qua tôi quên chấm công") is the answer to the form.
+        personal_lookup = is_leave_balance_query(text) or (
+            is_attendance_query(text) and (not req.draft_id or asks_question(req.message, text)))
         if req.draft_id and personal_lookup and not explicit_draft_reply:
             if owner_user_account_id is None:
                 raise HTTPException(403, "PERMISSION_DENIED")

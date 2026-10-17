@@ -167,3 +167,20 @@ def test_bare_weekday_attendance_lookup_points_back():
     friday = date(2026, 10, 16)
     assert attendance_period("Thứ 5 tôi chấm công lúc mấy giờ?", friday) == (date(2026, 10, 15), date(2026, 10, 15))
     assert attendance_period("thứ bảy tôi có chấm công không", friday) == (date(2026, 10, 10), date(2026, 10, 10))
+
+
+def test_future_day_attendance_is_an_empty_day_not_an_error():
+    friday = date(2026, 10, 16)
+    assert attendance_period("ngày mai tôi chấm công lúc mấy giờ", friday) == (date(2026, 10, 17), date(2026, 10, 17))
+
+
+@pytest.mark.parametrize("message,question", [
+    ("hôm qua tôi quên chấm công", False), ("hôm qua tôi chưa chấm công ra", False),
+    ("máy chấm công hôm qua bị hỏng", False),
+    ("hôm qua tôi chấm công lúc mấy giờ", True), ("hôm qua tôi chấm công chưa", True),
+    ("tuần này tôi đi muộn bao nhiêu lần", True), ("hôm qua tôi có chấm công không", True),
+    ("Hôm qua chấm công rồi?", True),
+])
+def test_statement_or_question(message, question):
+    from app.ai.parsing.personal import asks_question
+    assert asks_question(message, canonical(message)) is question

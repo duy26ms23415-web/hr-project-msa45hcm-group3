@@ -79,8 +79,9 @@ async def check_action(db, roles, today: date, command: str, params: dict, leave
     if db is None or not tagging_ready():
         return []  # Needs rule-labelled chunks; code rules still apply on submit.
     facts, domains, query = action_facts(command, params, today, leave_code)
-    # Savepoint around the SQL only: a failed search must not poison the caller's transaction
-    # (the draft is marked READY next), and none is held open across the provider call below.
+    # Savepoint around the rule search: a failed query must not poison the caller's transaction
+    # (the draft is marked READY next). The search may embed the query (one short provider call,
+    # no row locks); the policy verdict call below runs outside the savepoint.
     async with db.begin_nested():
         rules = await AIKnowledgeTool.search(db, roles, today, [query], limit=_RULE_LIMIT, embed_queries=[query],
                                              rule_types=("PROHIBITION", "OBLIGATION"), domains=domains)

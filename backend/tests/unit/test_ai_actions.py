@@ -91,6 +91,15 @@ def test_form_slots_are_text_and_annual_leave_is_never_guessed():
     assert (other.target, other.employee_reference) == ("EMPLOYEE", "Nam")
 
 
+def test_unpaid_leave_is_never_guessed_but_sick_leave_may_be_implied():
+    guessed = plan_of(call("draft_leave_request", leave_type="UNPAID", date="mai"), message="mai cho em nghỉ việc riêng")
+    assert "leave_code" not in guessed.slots
+    named = plan_of(call("draft_leave_request", leave_type="UNPAID", date="mai"), message="mai em xin nghỉ không lương")
+    assert named.slots["leave_code"] == "UNPAID"
+    sick = plan_of(call("draft_leave_request", leave_type="SICK", date="mai"), message="em bị sốt, mai xin nghỉ")
+    assert sick.slots["leave_code"] == "SICK"
+
+
 def test_several_requests_become_parts_and_repeated_actions_need_a_choice():
     plan = plan_of(call("answer_policy_question", question="Nghỉ ốm cần giấy tờ gì?", search_queries=["giấy tờ nghỉ ốm"]),
                    call("show_leave_balance", subject="SELF"))

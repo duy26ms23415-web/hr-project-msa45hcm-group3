@@ -33,6 +33,15 @@ def is_attendance_query(text: str) -> bool:
                                 or "cham cong" in text and bool(_PERIOD.search(text)))
 
 
+def asks_question(message: str, text: str) -> bool:
+    """A question, not a statement ("hôm qua tôi quên chấm công" answers an open fix form).
+
+    "chưa"/"không" ask only at the end; mid-sentence they negate ("tôi chưa chấm công ra")."""
+    return "?" in message or bool(re.search(
+        r"\b(?:may (?:gio|lan|ngay|buoi|cong|phut)|bao nhieu|luc nao|ngay nao|the nao|ra sao)\b"
+        r"|\b(?:chua|khong)\s*$", text))
+
+
 def asks_lateness(text: str) -> bool:
     return any(term in text for term in _LATENESS_TERMS)
 
