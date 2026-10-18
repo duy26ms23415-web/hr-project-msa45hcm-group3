@@ -89,7 +89,7 @@ def test_xlsx_template_has_expected_sheets_and_neutralizes_formulas():
         "note": "Recorded rows only",
         "rows": [{
             "employee_code": "=1+1", "full_name": "@SUM(A1)", "department_id": 3,
-            "recorded_days": 4, "present_days": 3, "incomplete_days": 1,
+            "recorded_days": 4, "present_days": 3, "half_days": 0, "incomplete_days": 1,
             "absent_days": 0, "worked_minutes": 123,
         }],
     }
@@ -97,7 +97,7 @@ def test_xlsx_template_has_expected_sheets_and_neutralizes_formulas():
     assert workbook.sheetnames == ["Thông tin", "Dữ liệu", "Tổng hợp"]
     data = workbook["Dữ liệu"]
     assert data["A2"].value == "'=1+1" and data["B2"].value == "'@SUM(A1)"
-    assert data["H2"].value == 123 and data["H2"].data_type == "n" and data["A2"].data_type != "f"
+    assert data["I2"].value == 123 and data["I2"].data_type == "n" and data["A2"].data_type != "f"
     report["kind"] = "LEAVE"
     report["rows"] = [{"employee_code": "E-7", "full_name": "Example", "department_id": 3, "approved_days": Decimal("0.50"), "pending_requests": 1, "rejected_requests": 0, "remaining_annual_days": Decimal("2.25")}]
     leave_data = load_workbook(BytesIO(build_xlsx_report(report)), data_only=False)["Dữ liệu"]

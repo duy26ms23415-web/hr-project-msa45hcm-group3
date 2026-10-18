@@ -71,7 +71,7 @@ def xlsx_decimal(value):
 def xlsx_value(field: str, value):
     if value is None:
         return None
-    if field in {"department_id", "attendance_fix_id", "request_id", "employee_count", "period_year", "period_month", "recorded_days", "present_days", "incomplete_days", "absent_days", "worked_minutes", "pending_requests", "rejected_requests"}:
+    if field in {"department_id", "attendance_fix_id", "request_id", "employee_count", "period_year", "period_month", "recorded_days", "present_days", "half_days", "incomplete_days", "absent_days", "worked_minutes", "pending_requests", "rejected_requests"}:
         return int(value)
     if field in {"approved_days", "remaining_annual_days"}:
         return xlsx_decimal(value)
@@ -101,7 +101,7 @@ def build_xlsx_report(report: dict, created_by: str = "", *, use_template: bool 
     """Render a fixed, macro-free report workbook from an already scoped report."""
     kind = report["kind"]
     report_fields = {
-        "ATTENDANCE": ["employee_code", "full_name", "department_id", "recorded_days", "present_days", "incomplete_days", "absent_days", "worked_minutes"],
+        "ATTENDANCE": ["employee_code", "full_name", "department_id", "recorded_days", "present_days", "half_days", "incomplete_days", "absent_days", "worked_minutes"],
         "LEAVE": ["employee_code", "full_name", "department_id", "approved_days", "pending_requests", "rejected_requests", "remaining_annual_days"],
         "ATTENDANCE_FIX": ["attendance_fix_id", "employee_code", "full_name", "department_id", "work_date", "event_type", "requested_at", "status", "reason"],
         "APPROVAL_QUEUE": ["request_type", "request_id", "employee_code", "full_name", "department_id", "request_date", "detail", "created_at"],
@@ -110,10 +110,10 @@ def build_xlsx_report(report: dict, created_by: str = "", *, use_template: bool 
         "PAYROLL_SUMMARY": ["department_id", "department_name", "currency_code", "employee_count", "base_salary", "allowance_amount", "overtime_amount", "deduction_amount", "gross_salary", "insurance_deduction", "taxable_income", "personal_income_tax", "other_deductions", "net_salary"],
     }
     columns = report_fields[kind]
-    metric_fields = [field for field in columns if field.endswith("_days") or field.endswith("_requests") or field in {"recorded_days", "present_days", "incomplete_days", "absent_days", "worked_minutes", "employee_count", "base_salary", "allowance_amount", "overtime_amount", "deduction_amount", "gross_salary", "insurance_deduction", "taxable_income", "personal_income_tax", "other_deductions", "net_salary"}]
+    metric_fields = [field for field in columns if field.endswith("_days") or field.endswith("_requests") or field in {"recorded_days", "present_days", "half_days", "incomplete_days", "absent_days", "worked_minutes", "employee_count", "base_salary", "allowance_amount", "overtime_amount", "deduction_amount", "gross_salary", "insurance_deduction", "taxable_income", "personal_income_tax", "other_deductions", "net_salary"}]
     labels = {
         "employee_code": "Mã nhân viên", "full_name": "Họ tên", "department_id": "Mã phòng ban",
-        "recorded_days": "Ngày có bản ghi", "present_days": "Đủ công", "incomplete_days": "Thiếu lượt",
+        "recorded_days": "Ngày có bản ghi", "present_days": "Đủ công", "half_days": "Nửa ngày công", "incomplete_days": "Thiếu lượt",
         "absent_days": "Vắng", "worked_minutes": "Phút làm việc", "approved_days": "Ngày phép đã duyệt",
         "pending_requests": "Đơn chờ duyệt", "rejected_requests": "Đơn bị từ chối",
         "remaining_annual_days": "Số dư phép năm hiện tại",
@@ -440,13 +440,14 @@ class ReportService:
                 AttendanceDay.employee_id,
                 func.count().label("recorded_days"),
                 func.sum(case((AttendanceDay.attendance_status == "PRESENT", 1), else_=0)).label("present_days"),
+                func.sum(case((AttendanceDay.attendance_status == "HALF_DAY", 1), else_=0)).label("half_days"),
                 func.sum(case((AttendanceDay.attendance_status == "INCOMPLETE", 1), else_=0)).label("incomplete_days"),
                 func.sum(case((AttendanceDay.attendance_status == "ABSENT", 1), else_=0)).label("absent_days"),
                 func.sum(AttendanceDay.worked_minutes).label("worked_minutes"),
             ).join(visible, visible.c.employee_id == AttendanceDay.employee_id).where(
                 AttendanceDay.work_date.between(start, end)
             ).group_by(AttendanceDay.employee_id).subquery()
-            metrics = ["recorded_days", "present_days", "incomplete_days", "absent_days", "worked_minutes"]
+            metrics = ["recorded_days", "present_days", "half_days", "incomplete_days", "absent_days", "worked_minutes"]
             stmt = select(visible, *[func.coalesce(summary.c[name], 0).label(name) for name in metrics]).outerjoin(summary, summary.c.employee_id == visible.c.employee_id)
         elif kind == "LEAVE":
             summary = select(
