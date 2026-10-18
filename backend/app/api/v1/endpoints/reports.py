@@ -199,7 +199,7 @@ async def generate_report(
         )
     if output == "csv":
         fields_by_kind = {
-            "ATTENDANCE": ["employee_id", "employee_code", "full_name", "department_id", "recorded_days", "present_days", "incomplete_days", "absent_days", "worked_minutes"],
+            "ATTENDANCE": ["employee_id", "employee_code", "full_name", "department_id", "recorded_days", "present_days", "half_days", "incomplete_days", "absent_days", "worked_minutes"],
             "LEAVE": ["employee_id", "employee_code", "full_name", "department_id", "approved_days", "pending_requests", "rejected_requests", "remaining_annual_days"],
             "ATTENDANCE_FIX": ["attendance_fix_id", "employee_id", "employee_code", "full_name", "department_id", "work_date", "event_type", "requested_at", "status", "reason", "created_at"],
             "APPROVAL_QUEUE": ["request_type", "request_id", "employee_id", "employee_code", "full_name", "department_id", "request_date", "detail", "created_at"],
